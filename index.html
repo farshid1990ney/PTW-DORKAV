@@ -28,11 +28,27 @@
       --accent: #0f766e;
     }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    /* ===== راه‌حل استاندارد WebView: قفل body، اسکرول در #app =====
+       در WebView (webintoapp)، SwipeRefreshLayout با دیدن scrollY=0 در WebView
+       کنترل را برای Pull-to-Refresh می‌گیرد. با قفل کردن body و انتقال اسکرول
+       به #app، WebView هرگز «بالای صفحه» نیست → Pull-to-Refresh اصلاً فعال نمی‌شود
+       و اسکرول به بالا/پایین کاملاً آزاد و روان است. */
     html, body {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
       overscroll-behavior: none;
-      overscroll-behavior-y: contain;   /* صریح برای مرورگرهایی که فقط y را می‌فهمند */
-      /* جلوگیری از ژست Pull-to-Refresh در سطح مرورگر/WebView */
-      touch-action: pan-y;               /* اسکرول عمودی (بالا و پایین) آزاد — جلوگیری از رفرش با JS انجام می‌شود */
+      overscroll-behavior-y: contain;
+      touch-action: manipulation;
+    }
+    #app {
+      position: absolute;
+      inset: 0;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior-y: contain;
     }
     body {
       margin: 0;
@@ -868,7 +884,7 @@
   <script>
     const LS_SESSION = 'ptw_lead_zinc_session_v2';
     const EXPECTED_API_VERSION = 'v13.0';   // نسخه سرور مورد انتظار (برای تشخیص Deployment قدیمی)
-    const APP_FILE_VERSION = 'v14.2-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل)
+    const APP_FILE_VERSION = 'v15.0-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل)
     const LS_CACHE = 'ptw_lead_zinc_cache_v2';
     const LS_OFFLINE_QUEUE = 'ptw_offline_queue_v2';
     const LS_SECONDARY_API = 'ptw_secondary_api_url_v2';
@@ -2913,41 +2929,30 @@
        (وقتی داخل مودال/منو اسکرول به لبه می‌رسد، صفحه رفرش نشود)
        ============================================================ */
     (function(){
-      // ست کردن overscrollBehavior در JS (بعضی مرورگرها CSS را دیر می‌خوانند)
+      // با قفل شدن body و اسکرول در #app، Pull-to-Refresh در WebView دیگر فعال نمی‌شود.
+      // این محافظ فقط برای کانتینرهای داخلی (مودال‌ها) کشش اضافه را مهار می‌کند.
       try {
         document.documentElement.style.overscrollBehavior = 'contain';
         document.body.style.overscrollBehavior = 'contain';
-        document.documentElement.style.overscrollBehaviorY = 'contain';
-        document.body.style.overscrollBehaviorY = 'contain';
+        const app = document.getElementById('app');
+        if(app) app.style.overscrollBehaviorY = 'contain';
       } catch(eOS){}
 
       let touchStartY = 0;
-      let touchStartX = 0;
       document.addEventListener('touchstart', function(e){
-        if(e.touches && e.touches[0]){
-          touchStartY = e.touches[0].clientY;
-          touchStartX = e.touches[0].clientX;
-        }
+        if(e.touches && e.touches[0]) touchStartY = e.touches[0].clientY;
       }, { passive: true });
 
       document.addEventListener('touchmove', function(e){
         if(!e.touches || !e.touches[0]) return;
         const dy = e.touches[0].clientY - touchStartY;
-        const dx = e.touches[0].clientX - touchStartX;
-        // فقط کشیدن عمودی (نه افقی — تا اسکرول افقی جدول خراب نشود)
-        if(Math.abs(dy) < Math.abs(dx)) return;
-        if(Math.abs(dy) < 4) return;   // آستانه کوچک‌تر برای واکنش سریع‌تر
-
-        // پیدا کردن نزدیک‌ترین «کانتینر اسکرول‌پذیر واقعی»
-        // ⚠️ body را نادیده می‌گیریم: اسکرول body در واقع اسکرول صفحه است (روی html)
-        //    و اگر آن را کانتینر حساب کنیم، کشیدن به بالا همیشه «به لبه رسیده» دیده می‌شود و بلاک می‌شود!
+        if(Math.abs(dy) < 4) return;
+        // فقط داخل کانتینرهای داخلی (مودال/منو): جلوی کشش اضافه در لبه‌ها را بگیر
         let el = (e.target && e.target.nodeType === 1) ? e.target : null;
         while(el && el !== document.documentElement && el !== document.body){
           const st = window.getComputedStyle(el);
           const oy = st.overflowY;
-          const isRealContainer = (oy === 'auto' || oy === 'scroll' || oy === 'overlay');
-          if(isRealContainer){
-            // فقط اگر واقعاً اسکرول دارد و «محتوا از کادر بزرگ‌تر است»
+          if(oy === 'auto' || oy === 'scroll' || oy === 'overlay'){
             if(el.scrollHeight > el.clientHeight + 1){
               if(dy > 0 && el.scrollTop <= 0){ e.preventDefault(); }
               else if(dy < 0 && el.scrollTop + el.clientHeight >= el.scrollHeight - 1){ e.preventDefault(); }
@@ -2956,33 +2961,7 @@
           }
           el = el.parentElement;
         }
-
-        // در صفحه اصلی: فقط «کشیدن رو به پایین» وقتی «بالای واقعی صفحه» هستیم → رفرش ممنوع
-        // (کشیدن رو به بالا = اسکرول به بالا، کاملاً آزاد است)
-        const scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
-        if(dy > 0 && scrollTop <= 0){
-          e.preventDefault();
-          e.stopPropagation();
-        }
-        // ⚠️ کشیدن به بالا (dy<0) هرگز جلوگیری نمی‌شود — اسکرول به بالا همیشه آزاد
       }, { passive: false });
-
-      // === جلوگیری از Pull-to-Refresh فقط با JS (بدون هک اسکرول) ===
-      // هک «۱ پیکسل» حذف شد چون اسکرول به بالا را می‌چسباند.
-      // رفرش فقط با preventDefault در touchmove مهار می‌شود و اسکرول عادی کاملاً آزاد است.
-      (function(){
-        // بعد از بستن هر مودال، اگر صفحه واقعاً بالاست، کاری نمی‌کنیم (اسکرول آزاد)
-        // فقط اطمینان: هنگام شروع، جایگزینی برای اسکرول اجباری نیست
-      })();
-
-      // جلوگیری از «کشیدن از لبه بالای صفحه» حتی قبل از شروع اسکرول (Chrome اندروید)
-      document.addEventListener('touchstart', function(e){
-        const scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
-        if(scrollTop <= 0 && e.touches && e.touches[0] && e.touches[0].clientY < 60){
-          // لمس نزدیک بالای صفحه — برای کشیدن پایین رفرش می‌شود
-          // کاری نمی‌کنیم؛ touchmove تصمیم می‌گیرد
-        }
-      }, { passive: true });
     })();
 
     /* ============================================================
@@ -3056,5 +3035,5 @@
 
     window.onload = boot;
   </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a28701a5eb2c0179',t:'MTc4NjI4MTA4Mw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a2871215481ff9af',t:'MTc4NjI4MTc1Nw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
