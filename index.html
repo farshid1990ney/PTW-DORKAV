@@ -866,7 +866,7 @@
   <script>
     const LS_SESSION = 'ptw_lead_zinc_session_v2';
     const EXPECTED_API_VERSION = 'v13.0';   // نسخه سرور مورد انتظار (برای تشخیص Deployment قدیمی)
-    const APP_FILE_VERSION = 'v13.8-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل)
+    const APP_FILE_VERSION = 'v13.9-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل)
     const LS_CACHE = 'ptw_lead_zinc_cache_v2';
     const LS_OFFLINE_QUEUE = 'ptw_offline_queue_v2';
     const LS_SECONDARY_API = 'ptw_secondary_api_url_v2';
@@ -3022,7 +3022,26 @@
       targets.forEach(function(el){ obs.observe(el, { attributes: true, attributeFilter: ['class'] }); });
     })();
 
+    // ===== غیرفعال کردن Pull-to-Refresh در اپ webintoapp (WebToNative) =====
+    // اگر اپ از موتور WebToNative ساخته شده باشد، با این API رفرش کشیدن خاموش می‌شود
+    (function(){
+      function disableWtnPullRefresh(){
+        try {
+          if(window.WTN && typeof window.WTN.enablePullToRefresh === 'function'){
+            window.WTN.enablePullToRefresh(false);
+            console.log('✅ Pull-to-Refresh خاموش شد (WTN)');
+          }
+        } catch(eWTN){}
+      }
+      // تلاش بعد از لود کامل (چون WTN ممکن است دیر لود شود)
+      disableWtnPullRefresh();
+      window.addEventListener('load', function(){ setTimeout(disableWtnPullRefresh, 1000); });
+      if(window.WTN){
+        try { window.WTN.enablePullToRefresh(false); } catch(e2){}
+      }
+    })();
+
     window.onload = boot;
   </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a286ddc8e8f2d08b',t:'MTc4NjI3OTYxNA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a286ee38ce73ae88',t:'MTc4NjI4MDI4OA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
