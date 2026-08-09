@@ -4,6 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#1e3c5c" />
+  <meta name="theme-color" content="#1e3c5c" media="(display-mode: standalone)" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
   <meta name="robots" content="noindex,nofollow" />
   <title>PTW HSE | سامانه پرمیت کارخانه سرب و روی</title>
   <style>
@@ -28,6 +35,24 @@
       background: var(--bg);
       color: #0f172a;
       line-height: 1.5;
+    }
+
+    /* ===== حالت اپ نصب‌شده (PWA / Add to Home Screen) =====
+       وقتی برنامه به‌صورت اپ باز می‌شود (display-mode: standalone)،
+       نوار ناوبری گوشی روی محتوا می‌افتد؛ این قوانین فاصله امن را بیشتر می‌کنند
+       تا دکمه‌های هوم/برگشت گوشی با محتوا تداخل نداشته باشند. */
+    @media (display-mode: standalone) {
+      /* فاصله بیشتر از نوار ناوبری پایین */
+      .wrap { padding-bottom: calc(30px + env(safe-area-inset-bottom, 0px) + 20px); }
+      .panel { padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px) + 20px); }
+      .drawer-menu { padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px) + 20px); }
+      /* فاصله از نچ/نوار بالا */
+      .top-sticky-container { padding-top: calc(env(safe-area-inset-top, 0px) + 2px); }
+      /* توست بالاتر از نچ */
+      .toast { top: calc(14px + env(safe-area-inset-top, 0px) + 4px); }
+      /* پس‌زمینه یکدست پشت نوار ناوبری */
+      body { background: var(--bg); }
+      html { background: var(--bg); }
     }
     body.gate-on #app { display: none; }
     body.gate-on #gate { display: flex; }
@@ -838,7 +863,7 @@
   <script>
     const LS_SESSION = 'ptw_lead_zinc_session_v2';
     const EXPECTED_API_VERSION = 'v13.0';   // نسخه سرور مورد انتظار (برای تشخیص Deployment قدیمی)
-    const APP_FILE_VERSION = 'v13.5-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل)
+    const APP_FILE_VERSION = 'v13.7-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل)
     const LS_CACHE = 'ptw_lead_zinc_cache_v2';
     const LS_OFFLINE_QUEUE = 'ptw_offline_queue_v2';
     const LS_SECONDARY_API = 'ptw_secondary_api_url_v2';
@@ -2055,7 +2080,12 @@
       if(!me){ showLogin(); return; }
       showApp();
 
-      window.addEventListener('online', processOfflineQueue);
+      // رفرش خودکار ممنوع! فقط اگر صف آفلاین واقعاً چیزی داشته باشد، ارسال شود
+      window.addEventListener('online', function(){
+        if(getOfflineQueue().length > 0){
+          processOfflineQueue();
+        }
+      });
 
       try {
         const c = JSON.parse(localStorage.getItem(LS_CACHE) || '[]');
@@ -2066,8 +2096,12 @@
         }
       } catch(e){}
 
+      // فقط یک بار دریافت اولیه (رفرش خودکار ممنوع)
       setTimeout(loadPermits, 100);
-      setTimeout(processOfflineQueue, 1000);
+      // پردازش صف آفلاین فقط وقتی صف غیرخالی است
+      if(getOfflineQueue().length > 0){
+        setTimeout(processOfflineQueue, 1000);
+      }
     }
 
     async function doLogin(){
@@ -2952,5 +2986,5 @@
 
     window.onload = boot;
   </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a2866e5b4c9d7879',t:'MTc4NjI3NTA1MA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a286d6a7bf05bb8a',t:'MTc4NjI3OTMyMg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
