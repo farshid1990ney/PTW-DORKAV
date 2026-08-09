@@ -868,7 +868,7 @@
   <script>
     const LS_SESSION = 'ptw_lead_zinc_session_v2';
     const EXPECTED_API_VERSION = 'v13.0';   // نسخه سرور مورد انتظار (برای تشخیص Deployment قدیمی)
-    const APP_FILE_VERSION = 'v14.1-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل)
+    const APP_FILE_VERSION = 'v14.2-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل)
     const LS_CACHE = 'ptw_lead_zinc_cache_v2';
     const LS_OFFLINE_QUEUE = 'ptw_offline_queue_v2';
     const LS_SECONDARY_API = 'ptw_secondary_api_url_v2';
@@ -2938,16 +2938,20 @@
         if(Math.abs(dy) < Math.abs(dx)) return;
         if(Math.abs(dy) < 4) return;   // آستانه کوچک‌تر برای واکنش سریع‌تر
 
-        // پیدا کردن نزدیک‌ترین کانتینر اسکرول‌پذیر
+        // پیدا کردن نزدیک‌ترین «کانتینر اسکرول‌پذیر واقعی»
+        // ⚠️ body را نادیده می‌گیریم: اسکرول body در واقع اسکرول صفحه است (روی html)
+        //    و اگر آن را کانتینر حساب کنیم، کشیدن به بالا همیشه «به لبه رسیده» دیده می‌شود و بلاک می‌شود!
         let el = (e.target && e.target.nodeType === 1) ? e.target : null;
-        while(el && el !== document.documentElement){
+        while(el && el !== document.documentElement && el !== document.body){
           const st = window.getComputedStyle(el);
           const oy = st.overflowY;
-          const scrollable = (oy === 'auto' || oy === 'scroll' || oy === 'overlay') && el.scrollHeight > el.clientHeight + 1;
-          if(scrollable){
-            // داخل کانتینر اسکرول‌پذیر: فقط اگر به لبه رسیده باشد جلوی «کشش اضافه» را بگیر
-            if(dy > 0 && el.scrollTop <= 0){ e.preventDefault(); }
-            else if(dy < 0 && el.scrollTop + el.clientHeight >= el.scrollHeight - 1){ e.preventDefault(); }
+          const isRealContainer = (oy === 'auto' || oy === 'scroll' || oy === 'overlay');
+          if(isRealContainer){
+            // فقط اگر واقعاً اسکرول دارد و «محتوا از کادر بزرگ‌تر است»
+            if(el.scrollHeight > el.clientHeight + 1){
+              if(dy > 0 && el.scrollTop <= 0){ e.preventDefault(); }
+              else if(dy < 0 && el.scrollTop + el.clientHeight >= el.scrollHeight - 1){ e.preventDefault(); }
+            }
             return;
           }
           el = el.parentElement;
@@ -2955,11 +2959,12 @@
 
         // در صفحه اصلی: فقط «کشیدن رو به پایین» وقتی «بالای واقعی صفحه» هستیم → رفرش ممنوع
         // (کشیدن رو به بالا = اسکرول به بالا، کاملاً آزاد است)
-        const scrollTop = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+        const scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
         if(dy > 0 && scrollTop <= 0){
           e.preventDefault();
           e.stopPropagation();
         }
+        // ⚠️ کشیدن به بالا (dy<0) هرگز جلوگیری نمی‌شود — اسکرول به بالا همیشه آزاد
       }, { passive: false });
 
       // === جلوگیری از Pull-to-Refresh فقط با JS (بدون هک اسکرول) ===
@@ -3051,5 +3056,5 @@
 
     window.onload = boot;
   </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a286fa5f2a172a80',t:'MTc4NjI4MDc4NQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a28701a5eb2c0179',t:'MTc4NjI4MTA4Mw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
