@@ -295,6 +295,14 @@
       border: 2px dashed #cbd5e1; border-radius: 12px; padding: 14px; text-align: center;
       background: #f8fafc; margin-top: 10px; cursor: pointer;
     }
+    /* سوییچ مجوزها */
+    .perm-switch { width: 44px; height: 24px; border-radius: 999px; background: #cbd5e1; border: none; position: relative; cursor: pointer; transition: background .2s; padding: 0; flex-shrink: 0; }
+    .perm-switch.on { background: var(--success); }
+    .perm-switch .ps-knob { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: right .2s; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+    .perm-switch.on .ps-knob { right: 22px; }
+    .perm-switch:disabled { opacity: .5; cursor: wait; }
+    .user-card { display:flex; align-items:center; gap:10px; background:#f8fafc; border:1px solid #cbd5e1; border-radius:14px; padding:10px 12px; margin-bottom:8px; }
+    .user-avatar { width:40px; height:40px; border-radius:50%; background:linear-gradient(135deg,var(--d),var(--p)); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:1rem; flex-shrink:0; }
     .preview-img { width: 100%; max-height: 200px; object-fit: cover; border-radius: 10px; margin-top: 8px; display: none; }
 
     table { width: 100%; border-collapse: collapse; font-size: 0.74rem; min-width: 900px; }
@@ -375,11 +383,15 @@
         <span>❌ پرمیت‌های رد شده (بازرسی مجدد)</span>
         <span class="item-badge" id="mRejectedCnt" style="background:#fee2e2;color:#991b1b">0</span>
       </div>
-      <div class="drawer-item" id="drawerAdminReactivate" style="display:none" onclick="openUsersModal();closeDrawer();">
+      <div class="drawer-item admin-only" id="drawerAdminReactivate" style="display:none" onclick="openUsersModal();closeDrawer();">
+      <div class="drawer-item admin-only" id="drawerCreatePermit" style="display:none;color:var(--success)" onclick="openCreatePermitModal();closeDrawer();">
+        <span>➕ ثبت پرمیت دستی</span>
+        <span>جدید</span>
+      </div>
         <span>🔑 مجوز تمدید/بازفعالسازی کاربران</span>
         <span>مدیر</span>
       </div>
-      <div class="drawer-item" onclick="openTable();closeDrawer();">
+      <div class="drawer-item admin-only" onclick="openTable();closeDrawer();">
         <span>📊 گزارش و جدول کل پرمیت‌ها</span>
         <span>📑</span>
       </div>
@@ -389,21 +401,21 @@
         <span>🔄 بروزرسانی زنده از شیت</span>
         <span>بروزرسانی</span>
       </div>
-      <div class="drawer-item" onclick="openChannelInfoModal();closeDrawer();">
+      <div class="drawer-item admin-only" onclick="openChannelInfoModal();closeDrawer();">
         <span>⚡ وضعیت کانال شبکه (<b id="mActiveChannelText" style="color:var(--p)">چابک</b>)</span>
         <span>⚙️</span>
       </div>
-      <div class="drawer-item" onclick="openSecondaryMirrorModal();closeDrawer();">
+      <div class="drawer-item admin-only" onclick="openSecondaryMirrorModal();closeDrawer();">
         <span>🔗 اتصال به گوگل‌شیت دوم</span>
         <span>همگام‌سازی</span>
       </div>
-      <div class="drawer-item" onclick="openOfflineSyncModal();closeDrawer();">
+      <div class="drawer-item admin-only" onclick="openOfflineSyncModal();closeDrawer();">
         <span>📦 صف آفلاین و خروجی دتا</span>
         <span class="item-badge" id="mOfflineCnt">0</span>
       </div>
 
       <div class="drawer-section-title">⚙️ تنظیمات و راهنما</div>
-      <div class="drawer-item" onclick="openHelpModal();closeDrawer();">
+      <div class="drawer-item admin-only" onclick="openHelpModal();closeDrawer();">
         <span>ℹ️ راهنمای شیفت‌های ۱۲ ساعته</span>
         <span>راهنما</span>
       </div>
@@ -429,10 +441,11 @@
             <button class="icon" title="منوی اصلی" onclick="openDrawer()">☰</button>
             <div>
               <h1>HSE | کارخانه فرآوری سرب و روی</h1>
-              <small><span class="dot" id="dot"></span><span id="who">—</span> · کانال شبکه: <span id="activeLayerText" style="color:#fb923c;font-weight:800">چابک</span></small>
+              <small><span class="dot" id="dot"></span><span id="who">—</span> · کانال: <span id="activeLayerText" style="color:#fb923c;font-weight:800">لایه ۴ (Direct POST)</span> · سرور: <span id="srvVer" style="color:#a5f3fc;font-weight:800">—</span></small>
             </div>
           </div>
           <div style="display:flex;gap:6px">
+            <button class="icon" id="headerCreateBtn" title="➕ ثبت پرمیت جدید" onclick="openCreatePermitModal()" style="display:none;background:linear-gradient(135deg,#10b981,#059669);color:#fff;font-size:1.15rem;box-shadow:0 3px 10px rgba(16,185,129,.4)">➕</button>
             <button class="icon btn-refresh-header" id="headerRefreshBtn" title="🔄 بروزرسانی" onclick="loadPermits()">🔄</button>
             <button class="icon" title="ℹ️ راهنما" onclick="openHelpModal()">ℹ️</button>
           </div>
@@ -487,7 +500,19 @@
       <div style="background:#f8fafc;padding:12px;border-radius:12px;border:1px solid #cbd5e1;font-size:0.82rem;line-height:1.7">
         <strong>کانال فعال فعلی:</strong> <span id="modalActiveChannel" style="color:var(--p);font-weight:900">پروب موازی</span><br>
         <strong>سرعت پاسخگویی:</strong> <span id="modalLatencyText" style="color:var(--success);font-weight:800">&lt;۲۰۰ میلی‌ثانیه</span><br>
-        <button class="btn btn-w btn-sm" style="margin-top:10px" onclick="resetChannelLock()">🔄 تست مجدد و پروب موازی شبکه</button>
+        <strong>نسخه سرور:</strong> <span id="modalSrvVer" style="color:var(--d);font-weight:800">—</span> <span id="modalSrvOk" style="font-size:0.72rem"></span><br>
+        <strong>نسخه فایل برنامه:</strong> <span id="modalFileVer" style="color:var(--d);font-weight:800">—</span><br>
+        <strong>آدرس فعال:</strong> <span id="modalApiUrl" style="direction:ltr;display:inline-block;word-break:break-all;font-size:0.7rem;color:var(--muted)">—</span><br>
+        <button class="btn btn-x btn-sm" style="margin-top:6px;width:100%" onclick="hardResetApp()">🧹 بازنشانی کامل اپ (پاک کردن قفل‌ها و کش)</button>
+        <label style="margin-top:8px">✏️ آدرس سرور (Web App /exec):</label>
+        <input id="apiUrlInput" dir="ltr" style="font-size:0.72rem;text-align:left" placeholder="https://script.google.com/macros/s/.../exec" />
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn btn-p btn-sm" style="flex:1" onclick="saveApiUrl()">💾 ذخیره آدرس</button>
+          <button class="btn btn-d btn-sm" style="flex:1" onclick="resetApiUrl()">↩️ بازگشت به پیش‌فرض</button>
+        </div>
+        <button class="btn btn-w btn-sm" style="margin-top:8px;width:100%" onclick="resetChannelLock()">🔄 تست مجدد و پروب موازی شبکه</button>
+        <button class="btn btn-p btn-sm" style="margin-top:6px;width:100%" onclick="runConnectivityTest()">🧪 تست کامل اتصال (لایه به لایه)</button>
+        <div id="connTestResult" style="font-size:0.75rem;margin-top:8px;line-height:1.8"></div>
       </div>
       <button class="btn btn-d btn-block" style="margin-top:14px" onclick="closeChannelInfoModal()">بستن</button>
     </div>
@@ -614,6 +639,19 @@
     </div>
   </div>
 
+  <!-- مدال نمایش خطا (قابل کپی) -->
+  <div class="modal" id="errorModal">
+    <div class="panel" style="max-width:560px">
+      <h2>⚠️ جزئیات خطا</h2>
+      <div class="hint">این متن را کپی کنید و برای پشتیبانی بفرستید:</div>
+      <div id="errorDetail" style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:10px;font-size:0.75rem;direction:ltr;text-align:left;word-break:break-all;max-height:40vh;overflow-y:auto;white-space:pre-wrap;user-select:text"></div>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn btn-p" style="flex:1" onclick="copyErrorDetail()">📋 کپی متن خطا</button>
+        <button class="btn btn-d" style="flex:1" onclick="closeErrorModal()">بستن</button>
+      </div>
+    </div>
+  </div>
+
   <!-- مدال گشت HSE (ثبت بازدید) -->
   <div class="modal" id="patrolModal">
     <div class="panel">
@@ -650,6 +688,7 @@
       <div class="camera-box" onclick="document.getElementById('patrolPhotoInput').click()">
         <div style="font-size:1.6rem">📷</div>
         <div style="font-weight:800;font-size:0.82rem;color:var(--d)">گرفتن عکس با دوربین گوشی</div>
+        <div id="photoSizeLabel" style="font-size:0.7rem;color:var(--muted);margin-top:4px">📦 حجم خودکار تا ~۵۰۰KB کاهش می‌یابد</div>
         <input type="file" id="patrolPhotoInput" accept="image/*" capture="environment" style="display:none" onchange="handlePatrolPhotoSelect(this)" />
         <img id="photoPreview" class="preview-img" alt="پیش‌نمایش" />
       </div>
@@ -691,6 +730,50 @@
     </div>
   </div>
 
+  <!-- مدال ثبت دستی پرمیت (نیازمند مجوز مدیر ارشد) -->
+  <div class="modal" id="createPermitModal">
+    <div class="panel">
+      <h2>➕ ثبت دستی پرمیت (همه آیتم‌ها)</h2>
+      <div class="hint">پرمیت با وضعیت «در انتظار تایید» در گوگل‌شیت ذخیره می‌شود و پس از تایید، فعال می‌گردد.</div>
+      <label>شماره پرمیت <span style="font-weight:600;color:var(--muted);font-size:0.7rem">(خالی = خودکار)</span></label>
+      <input id="cpPermitNo" dir="ltr" style="text-align:center;font-weight:800" placeholder="خودکار" />
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div>
+          <label>تاریخ شروع (شمسی) *</label>
+          <input id="cpStartDate" dir="ltr" style="text-align:center;font-weight:800" placeholder="1404/05/20" />
+        </div>
+        <div>
+          <label>ساعت شروع *</label>
+          <input id="cpStartTime" dir="ltr" style="text-align:center" value="07:00" />
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div>
+          <label>تاریخ اتمام (اختیاری)</label>
+          <input id="cpEndDate" dir="ltr" style="text-align:center" placeholder="1404/05/20" />
+        </div>
+        <div>
+          <label>ساعت اتمام (اختیاری)</label>
+          <input id="cpEndTime" dir="ltr" style="text-align:center" value="19:00" />
+        </div>
+      </div>
+      <label>محل انجام کار *</label>
+      <input id="cpPlace" placeholder="مثال: سالن آسیاب / دیواترینگ / سنگ‌شکن..." />
+      <label>نوع کار *</label>
+      <input id="cpType" placeholder="مثال: تعمیرات / جوشکاری / کار در ارتفاع..." />
+      <label>شرح کار *</label>
+      <textarea id="cpDesc" rows="2" placeholder="توضیح کامل کار..."></textarea>
+      <label>واحد درخواست‌کننده</label>
+      <input id="cpUnit" placeholder="مثال: آسیاب / فلوتاسیون / دیواترینگ" />
+      <label>مجری / پیمانکار *</label>
+      <input id="cpContractor" placeholder="نام شرکت یا مجری کار" />
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn btn-p" style="flex:2" id="btnConfirmCreatePermit" onclick="confirmCreatePermit()">ثبت پرمیت در شیت 💾</button>
+        <button class="btn btn-d" style="flex:1" onclick="closeCreatePermitModal()">انصراف</button>
+      </div>
+    </div>
+  </div>
+
   <!-- مدال تمدید یک‌روزه و بازفعال‌سازی پرمیت (نیازمند مجوز مدیر ارشد) -->
   <div class="modal" id="reactivateModal">
     <div class="panel">
@@ -711,9 +794,13 @@
 
   <!-- مدال مدیریت مجوز بازفعال‌سازی (فقط مدیر ارشد) -->
   <div class="modal" id="usersModal">
-    <div class="panel" style="max-width:560px">
-      <h2>🔑 مدیریت مجوز تمدید/بازفعال‌سازی پرمیت</h2>
-      <div class="hint">کاربرانی که مجوز بگیرند می‌توانند پرمیت‌های بسته/رد شده را حداکثر تا ۵ روز تمدید و مجدداً فعال کنند:</div>
+    <div class="panel" style="max-width:600px">
+      <h2>🔑 مدیریت کاربران و مجوزها</h2>
+      <div class="hint">
+        <span style="display:inline-block;margin-left:10px">🔄 تمدید = بازفعال‌سازی پرمیت بسته/رد شده</span>
+        <span>➕ ثبت = ثبت پرمیت دستی از اپ</span>
+      </div>
+      <input id="usersSearch" placeholder="🔍 جستجوی نام یا کد..." oninput="renderUsers()" style="margin-bottom:10px" />
       <div id="usersContainer" style="max-height:55vh;overflow-y:auto"></div>
       <button class="btn btn-d btn-block" style="margin-top:14px" onclick="closeUsersModal()">بستن</button>
     </div>
@@ -750,11 +837,13 @@
 
   <script>
     const LS_SESSION = 'ptw_lead_zinc_session_v2';
+    const EXPECTED_API_VERSION = 'v13.0';   // نسخه سرور مورد انتظار (برای تشخیص Deployment قدیمی)
+    const APP_FILE_VERSION = 'v13.5-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل)
     const LS_CACHE = 'ptw_lead_zinc_cache_v2';
     const LS_OFFLINE_QUEUE = 'ptw_offline_queue_v2';
     const LS_SECONDARY_API = 'ptw_secondary_api_url_v2';
     const LS_LOCKED_LAYER = 'ptw_locked_layer_index_v2';
-    const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbx47PWn0e87ukNvgq7PyIXc5F66BrPx6wu1xaIPfjEbdLOo0J-0PqPYv97QSf04mr9Q/exec';
+    const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbwFo-xFvLiZA3rAqTqsLE0VQEkh6-gZR2QSg8iYUXdpkQwvo6-Ok_yx-eDhbdZghkvu/exec';
 
     let me = null;
     let rows = [];
@@ -768,10 +857,20 @@
     // قفل اکشن‌های در حال ارسال جهت جلوگیری قطعی از تکرار درخواست
     const inFlightActionKeys = new Set();
 
-    let lockedLayer = parseInt(localStorage.getItem(LS_LOCKED_LAYER) || '-1', 10);
+    let lockedLayer = parseInt(localStorage.getItem(LS_LOCKED_LAYER) || '4', 10);   // پیش‌فرض: لایه ۴ (Direct POST) — سریع‌ترین و مطمئن‌ترین
     let lockedLatency = parseInt(localStorage.getItem('ptw_locked_latency') || '0', 10);
 
-    function primaryApiUrl(){ return DEFAULT_API_URL; }
+    const LS_API_OVERRIDE = 'ptw_api_url_override_v1';
+    function primaryApiUrl(){
+      const ov = (localStorage.getItem(LS_API_OVERRIDE) || '').trim();
+      return ov || DEFAULT_API_URL;
+    }
+    function setPrimaryApiUrl(url){
+      try {
+        if(url){ localStorage.setItem(LS_API_OVERRIDE, url.trim()); }
+        else { localStorage.removeItem(LS_API_OVERRIDE); }
+      } catch(e){}
+    }
     function secondaryApiUrl(){ return (localStorage.getItem(LS_SECONDARY_API) || '').trim(); }
 
     function esc(s){
@@ -852,17 +951,18 @@
     }
 
     function fetchEmbedIframe(url, params, timeoutMs) {
-      const tMs = timeoutMs || 8000;
+      const tMs = timeoutMs || 20000;
       return new Promise((resolve, reject) => {
         const msgId = 'msg_' + Date.now() + '_' + Math.floor(Math.random() * 10000);
         params.msgId = msgId;
         params.embed = '1';
 
-        const q = new URLSearchParams(params).toString();
+        const q = Object.keys(params).map(function(k){ return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]); }).join('&');
         const iframe = document.getElementById('apiBridgeIframe');
 
         const timeout = setTimeout(() => {
           window.removeEventListener('message', onMessage);
+          try { iframe.remove(); } catch(eR){}
           reject(new Error('L1 Timeout'));
         }, tMs);
 
@@ -871,6 +971,7 @@
             if (e.data && e.data.msgId === msgId) {
               clearTimeout(timeout);
               window.removeEventListener('message', onMessage);
+              try { iframe.remove(); } catch(eR){}
               resolve(e.data.data);
             }
           } catch(err){}
@@ -882,12 +983,12 @@
     }
 
     function fetchJSONP(url, params, timeoutMs) {
-      const tMs = timeoutMs || 8000;
+      const tMs = timeoutMs || 20000;
       return new Promise((resolve, reject) => {
         const callbackName = 'jsonp_cb_' + Date.now() + '_' + Math.floor(Math.random() * 10000);
         params.callback = callbackName;
 
-        const q = new URLSearchParams(params).toString();
+        const q = Object.keys(params).map(function(k){ return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]); }).join('&');
         const script = document.createElement('script');
         script.src = url + '?' + q;
         script.async = true;
@@ -917,33 +1018,46 @@
       });
     }
 
+    // fetch سازگار با همه مرورگرها (بدون AbortController که در گوشی‌های قدیمی مشکل دارد)
+    // timeout با Promise.race انجام می‌شود
+    function fetchWithTimeout(url, options, tMs){
+      return new Promise(function(resolve, reject){
+        let done = false;
+        const to = setTimeout(function(){ if(!done){ done = true; reject(new Error('Timeout')); } }, tMs || 20000);
+        fetch(url, options).then(function(r){
+          if(!done){ done = true; clearTimeout(to); resolve(r); }
+        }).catch(function(e){
+          if(!done){ done = true; clearTimeout(to); reject(e); }
+        });
+      });
+    }
+
     async function fetchDirectGET(url, params, timeoutMs) {
       const tMs = timeoutMs || 8000;
-      const q = new URLSearchParams(params).toString();
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), tMs);
+      const q = Object.keys(params).map(function(k){ return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]); }).join('&');
       try {
-        const resp = await fetch(url + '?' + q, { method: 'GET', signal: controller.signal });
-        clearTimeout(tid);
-        if (resp.ok) return await resp.json();
-      } catch(e){ clearTimeout(tid); }
+        const resp = await fetchWithTimeout(url + '?' + q, { method: 'GET' }, tMs);
+        if (resp.ok) {
+          const txt = await resp.text();
+          try { return JSON.parse(txt); } catch(eJ){ throw new Error('L3 BadJSON'); }
+        }
+      } catch(e){ throw new Error('L3 Failed'); }
       throw new Error('L3 Failed');
     }
 
     async function fetchDirectPOST(url, payload, timeoutMs) {
       const tMs = timeoutMs || 10000;
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), tMs);
       try {
-        const resp = await fetch(url, {
+        const resp = await fetchWithTimeout(url, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify(payload),
-          signal: controller.signal
-        });
-        clearTimeout(tid);
-        if (resp.ok) return await resp.json();
-      } catch(e){ clearTimeout(tid); }
+          body: JSON.stringify(payload)
+        }, tMs);
+        if (resp.ok) {
+          const txt = await resp.text();
+          try { return JSON.parse(txt); } catch(eJ){ throw new Error('L4 BadJSON'); }
+        }
+      } catch(e){ throw new Error('L4 Failed'); }
       throw new Error('L4 Failed');
     }
 
@@ -958,19 +1072,19 @@
     async function raceProbeFastRead(params, timeoutMs) {
       const pUrl = primaryApiUrl();
       const startTime = Date.now();
-      const tMs = timeoutMs || 8000;
+      const tMs = timeoutMs || 15000;
 
       const probe = async (idx) => {
         const res = await executeLayer(idx, pUrl, Object.assign({}, params), tMs);
-        if (res && res.ok !== undefined) {
+        if (res && res.ok === true) {   // فقط ok:true واقعی معتبر است (ok:false خطاست)
           return { layerIdx: idx, data: res, latency: Date.now() - startTime };
         }
         throw new Error('Layer ' + idx + ' invalid response');
       };
 
       const winner = await Promise.any([
-        probe(3),
         probe(4),
+        probe(3),
         probe(2),
         probe(1)
       ]);
@@ -986,12 +1100,12 @@
 
     async function getAction8Layers(params, customTimeoutMs) {
       const pUrl = primaryApiUrl();
-      const tMs = customTimeoutMs || 10000;
+      const tMs = customTimeoutMs || 20000;
 
       if (lockedLayer >= 1 && lockedLayer <= 4) {
         try {
           const res = await executeLayer(lockedLayer, pUrl, Object.assign({}, params), tMs);
-          if (res && res.ok !== undefined) {
+          if (res && res.ok === true) {   // فقط ok:true واقعی
             updateActiveLayerUI(lockedLayer, lockedLatency);
             return res;
           }
@@ -1009,7 +1123,7 @@
       if (sUrl) {
         try {
           const resSec = await fetchEmbedIframe(sUrl, Object.assign({}, params), tMs);
-          if (resSec && resSec.ok !== undefined) {
+          if (resSec && resSec.ok === true) {   // فقط ok:true واقعی
             updateActiveLayerUI(5, 0);
             return resSec;
           }
@@ -1042,7 +1156,7 @@
 
       if (isLargePayload) {
         try {
-          const resLarge = await fetchDirectPOST(pUrl, payload, 8000);
+          const resLarge = await fetchDirectPOST(pUrl, payload, 25000);
           if (resLarge && resLarge.ok) {
             updateActiveLayerUI(4, lockedLatency);
             return resLarge;
@@ -1050,9 +1164,15 @@
         } catch(eLarge) {}
       }
 
-      if (!isLargePayload && lockedLayer >= 1 && lockedLayer <= 4) {
+      // ⚠️ نکته حیاتی: Google Apps Script Web App با درخواست POST یک 302 redirect می‌دهد
+      // و مرورگر طبق استاندارد، در redirect 302 متد POST را به GET تبدیل کرده و body را دور می‌ریزد!
+      // بنابراین برای اکشن‌های نوشتاری باید از GET استفاده کنیم (پارامترها در آدرس می‌مانند)
+      // و doGet در سرور هندلر کامل همه اکشن‌ها را دارد.
+      const WRITE_ACTIONS = ['approvePermit','rejectPermit','reinspectPermit','closePermit','savePatrolVisit','reactivatePermit','setReactivation','setCreatePermit','createPermit','login'];
+      const isWriteAction = WRITE_ACTIONS.includes(payload.action);
+      if (!isLargePayload && lockedLayer >= 1 && lockedLayer <= 3) {
         try {
-          const res = await executeLayer(lockedLayer, pUrl, payload, 3500);
+          const res = await executeLayer(lockedLayer, pUrl, payload, 25000);
           if (res && res.ok) {
             updateActiveLayerUI(lockedLayer, lockedLatency);
             return res;
@@ -1063,12 +1183,31 @@
         }
       }
 
+      // اعتبارسنجی پاسخ برای اکشن‌های نوشتاری (جلوگیری از «موفقیت کاذب»)
+      function isValidWriteResponse(act, r){
+        if(!r || !r.ok) return false;
+        if(r.offlineQueued) return false;
+        switch(act){
+          case 'createPermit': return !!(r.permitNo && r.row);
+          case 'setReactivation':
+          case 'setCreatePermit': return !!r.targetCode && typeof r.grant === 'boolean';
+          case 'reactivatePermit': return !!r.endDate;
+          case 'approvePermit':
+          case 'rejectPermit':
+          case 'reinspectPermit':
+          case 'closePermit': return !!r.permitNo;
+          case 'savePatrolVisit': return !!r.visitId;
+          case 'login': return !!r.user;
+          default: return true;
+        }
+      }
+      // لایه ۴ (Direct POST) همیشه اول — سریع‌ترین و مطمئن‌ترین در شبکه شما
       const sequentialOrder = [4, 3, 2, 1];
       for (let i = 0; i < sequentialOrder.length; i++) {
         const idx = sequentialOrder[i];
         try {
-          const resSeq = await executeLayer(idx, pUrl, payload, 3500);
-          if (resSeq && resSeq.ok) {
+          const resSeq = await executeLayer(idx, pUrl, payload, 25000);
+          if (resSeq && resSeq.ok && isValidWriteResponse(payload.action, resSeq)) {
             lockedLayer = idx;
             localStorage.setItem(LS_LOCKED_LAYER, String(idx));
             updateActiveLayerUI(idx, 0);
@@ -1079,7 +1218,7 @@
 
       if (sUrl) {
         try {
-          const res5 = await fetchDirectPOST(sUrl, payload, 4000);
+          const res5 = await fetchDirectPOST(sUrl, payload, 25000);
           if (res5 && res5.ok) {
             updateActiveLayerUI(5, 0);
             return res5;
@@ -1089,7 +1228,11 @@
 
       enqueueOfflineAction(payload);
       updateActiveLayerUI(6, 0);
-      return { ok: true, offlineQueued: true, message: 'عملیات در صف آفلاین محلی ثبت شد.' };
+      // صادقانه: موفقیت کاذب نده — عملیات در صف آفلاین است
+      const online = (typeof navigator !== 'undefined') ? navigator.onLine : true;
+      const reason = online ? 'اینترنت گوشی وصل است ولی سرور پاسخ نداد (آدرس/Deployment را چک کنید).'
+                            : 'اینترنت گوشی قطع است.';
+      return { ok: false, offlineQueued: true, error: 'ارتباط با سرور برقرار نشد؛ ' + reason + ' عملیات در صف آفلاین ذخیره شد.' };
     }
 
     function resetChannelLock() {
@@ -1153,6 +1296,11 @@
     }
 
     function updateDrawerUI() {
+      // آیتم‌های مدیریتی فقط برای مدیر ارشد (کد 96792582)
+      const isAdmin = !!(me && me.isAdmin);
+      document.querySelectorAll('.admin-only').forEach(function(el){
+        el.style.display = isAdmin ? 'flex' : 'none';
+      });
       const q = getOfflineQueue();
       const validRows = rows.filter(p => !isHeaderRecord(p));
       let act = 0, pending = 0, high = 0, rejected = 0;
@@ -1175,6 +1323,10 @@
       // آیتم مدیریت مجوز بازفعالسازی فقط برای مدیر ارشد
       const drRe = document.getElementById('drawerAdminReactivate');
       if (drRe) drRe.style.display = (me && me.isAdmin) ? 'flex' : 'none';
+      const drCp = document.getElementById('drawerCreatePermit');
+      if (drCp) drCp.style.display = (me && (me.isAdmin || me.canCreatePermit)) ? 'flex' : 'none';
+      const hdrCp = document.getElementById('headerCreateBtn');
+      if (hdrCp) hdrCp.style.display = (me && (me.isAdmin || me.canCreatePermit)) ? 'inline-flex' : 'none';
 
       if (me) {
         if (document.getElementById('drawerUserName')) document.getElementById('drawerUserName').textContent = me.firstName + ' ' + me.lastName;
@@ -1273,6 +1425,28 @@
       if (qInput) {
         qInput.value = dateStr;
         debouncePaint();
+      }
+    }
+
+    let lastErrorDetail = '';
+    function showError(title, detail){
+      lastErrorDetail = detail;
+      document.getElementById('errorDetail').textContent = detail;
+      lockBodyScroll(true);
+      document.getElementById('errorModal').classList.add('show');
+    }
+    function closeErrorModal(){ lockBodyScroll(false); document.getElementById('errorModal').classList.remove('show'); }
+    function copyErrorDetail(){
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(lastErrorDetail).then(function(){ toast('📋 متن خطا کپی شد'); });
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = lastErrorDetail;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        toast('📋 متن خطا کپی شد');
       }
     }
 
@@ -1454,6 +1628,103 @@
     }
 
     /* ============================================================
+       ثبت دستی پرمیت (کاربر دارای مجوز یا مدیر ارشد)
+       ============================================================ */
+    function openCreatePermitModal(){
+      if(!me || (!me.isAdmin && !me.canCreatePermit)){ toast('شما مجوز ثبت پرمیت را ندارید.'); return; }
+      document.getElementById('cpPermitNo').value = (me && me.nextPermitNo) ? me.nextPermitNo : '';
+      document.getElementById('cpStartDate').value = jalaliTodayStr();
+      document.getElementById('cpStartTime').value = '07:00';
+      document.getElementById('cpEndDate').value = '';
+      document.getElementById('cpEndTime').value = '19:00';
+      document.getElementById('cpPlace').value = '';
+      document.getElementById('cpType').value = '';
+      document.getElementById('cpDesc').value = '';
+      document.getElementById('cpUnit').value = '';
+      document.getElementById('cpContractor').value = '';
+      lockBodyScroll(true);
+      document.getElementById('createPermitModal').classList.add('show');
+    }
+    function closeCreatePermitModal(){ lockBodyScroll(false); document.getElementById('createPermitModal').classList.remove('show'); }
+
+    async function confirmCreatePermit(){
+      if(!me) return;
+      const key = 'createpermit';
+      if (inFlightActionKeys.has(key)) return;
+
+      const permitNoInput = (document.getElementById('cpPermitNo').value||'').trim();
+      const startDate = (document.getElementById('cpStartDate').value||'').trim();
+      const startTime = (document.getElementById('cpStartTime').value||'').trim();
+      const endDate = (document.getElementById('cpEndDate').value||'').trim();
+      const endTime = (document.getElementById('cpEndTime').value||'').trim();
+      const place = (document.getElementById('cpPlace').value||'').trim();
+      const type = (document.getElementById('cpType').value||'').trim();
+      const desc = (document.getElementById('cpDesc').value||'').trim();
+      const unit = (document.getElementById('cpUnit').value||'').trim();
+      const contractor = (document.getElementById('cpContractor').value||'').trim();
+
+      if(!/^\d{4}\/\d{1,2}\/\d{1,2}$/.test(startDate)){ toast('تاریخ شروع نامعتبر است (نمونه: 1404/05/20)'); return; }
+      const sp = startDate.split('/');
+      const normStart = sp[0]+'/'+sp[1].padStart(2,'0')+'/'+sp[2].padStart(2,'0');
+      if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime)){ toast('ساعت شروع نامعتبر است'); return; }
+      if(!place){ toast('محل انجام کار الزامی است'); return; }
+      if(!type){ toast('نوع کار الزامی است'); return; }
+      if(!desc){ toast('شرح کار الزامی است'); return; }
+      if(!contractor){ toast('مجری/پیمانکار الزامی است'); return; }
+      let normEnd = '';
+      if(endDate){
+        if(!/^\d{4}\/\d{1,2}\/\d{1,2}$/.test(endDate)){ toast('تاریخ اتمام نامعتبر است'); return; }
+        const ep = endDate.split('/');
+        normEnd = ep[0]+'/'+ep[1].padStart(2,'0')+'/'+ep[2].padStart(2,'0');
+        if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(endTime)){ toast('ساعت اتمام نامعتبر است'); return; }
+      }
+
+      const btn = document.getElementById('btnConfirmCreatePermit');
+      btn.disabled = true;
+      btn.textContent = '⏳ در حال ثبت در گوگل‌شیت...';
+      inFlightActionKeys.add(key);
+      try {
+        const res = await postAction8Layers({
+          action: 'createPermit',
+          code: me.code,
+          firstName: me.firstName,
+          lastName: me.lastName,
+          permitNo: permitNoInput,
+          startDate: normStart,
+          startTime: startTime,
+          endDate: normEnd,
+          endTime: endDate ? endTime : '',
+          place: place,
+          type: type,
+          desc: desc,
+          unit: unit,
+          contractor: contractor
+        });
+        if(res && res.ok && res.permitNo && res.row){
+          toast('✅ ' + (res.message || 'پرمیت ثبت شد.'));
+          closeCreatePermitModal();
+          // نمایش فوری در تب «در انتظار» تا کاربر پرمیت ثبت‌شده را ببیند
+          if(res.permitNo) me.nextPermitNo = String(parseInt(res.permitNo, 10) + 1);
+          switchTabQuick('pending');
+          loadPermits();
+        } else if(res && res.offlineQueued){
+          showError('⚠️ عملیات در صف آفلاین ذخیره شد', 'عملیات: createPermit\nآدرس: ' + primaryApiUrl() + '\n' + (res.error || '') + '\nزمان: ' + new Date().toLocaleString());
+        } else if(res && res.ok){
+          // پاسخ «موفق» ولی بدون شماره/ردیف → یعنی سرور واقعاً ثبت نکرده (نسخه قدیمی Deployment)
+          showError('⚠️ پرمیت ثبت نشد — پاسخ ناقص سرور', 'عملیات: createPermit\nنسخه سرور: ' + (res.apiVersion || '?') + '\nنسخه فایل: ' + APP_FILE_VERSION + '\nآدرس: ' + primaryApiUrl() + '\nپاسخ خام: ' + JSON.stringify(res));
+        } else {
+          showError('❌ خطا در ثبت پرمیت', 'عملیات: createPermit\nآدرس: ' + primaryApiUrl() + '\nخطا: ' + ((res && res.error) || 'ناشناخته') + '\nزمان: ' + new Date().toLocaleString());
+        }
+      } catch(e){
+        showError('❌ خطا در ارسال ثبت پرمیت', 'عملیات: createPermit\nآدرس: ' + primaryApiUrl() + '\nخطا: ' + (e.message || e) + '\nزمان: ' + new Date().toLocaleString());
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'ثبت پرمیت در شیت 💾';
+        inFlightActionKeys.delete(key);
+      }
+    }
+
+    /* ============================================================
        مدیریت مجوز بازفعال‌سازی (فقط مدیر ارشد)
        ============================================================ */
     async function openUsersModal(){
@@ -1462,25 +1733,16 @@
       await loadUsers();
     }
     function closeUsersModal(){ lockBodyScroll(false); document.getElementById('usersModal').classList.remove('show'); }
+    let allUsersCache = [];
+
     async function loadUsers(){
       const c = document.getElementById('usersContainer');
       c.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted)">در حال دریافت کاربران...</div>';
       try {
-        const res = await getAction8Layers({ action: 'listUsers', code: me.code, firstName: me.firstName, lastName: me.lastName }, 8000);
+        const res = await getAction8Layers({ action: 'listUsers', code: me.code, firstName: me.firstName, lastName: me.lastName }, 15000);
         if(res && res.ok && Array.isArray(res.users)){
-          if(!res.users.length){ c.innerHTML = '<div class="empty">کاربری یافت نشد.</div>'; return; }
-          c.innerHTML = res.users.map(u => `
-            <div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:12px;padding:10px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:8px">
-              <div style="min-width:0">
-                <div style="font-weight:800;color:var(--d)">${esc(u.firstName||'—')} ${esc(u.lastName||'')} ${u.code===me.code?'<span class="badge ok">شما</span>':''}</div>
-                <div style="font-size:0.72rem;color:var(--muted)">کد: ${esc(u.code)} | وضعیت: ${esc(u.status||'—')}</div>
-              </div>
-              <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-                <span class="badge ${u.hasReactivate?'ok':'wait'}">${u.hasReactivate?'مجاز':'بدون مجوز'}</span>
-                <button class="btn btn-sm ${u.hasReactivate?'btn-x':'btn-g'}" onclick="toggleGrant('${esc(u.code)}', ${u.hasReactivate?'false':'true'})">${u.hasReactivate?'لغو':'اعطا'}</button>
-              </div>
-            </div>
-          `).join('');
+          allUsersCache = res.users;
+          renderUsers();
         } else {
           c.innerHTML = '<div style="text-align:center;padding:20px;color:var(--danger)">' + esc((res && res.error) || 'خطا در دریافت') + '</div>';
         }
@@ -1488,28 +1750,76 @@
         c.innerHTML = '<div style="text-align:center;padding:20px;color:var(--danger)">خطا در دریافت کاربران</div>';
       }
     }
-    async function toggleGrant(targetCode, grant){
-      const btnLock = 'grant_' + targetCode;
+
+    function renderUsers(){
+      const c = document.getElementById('usersContainer');
+      const q = (document.getElementById('usersSearch').value || '').trim().toLowerCase();
+      const list = allUsersCache.filter(u => {
+        if(!q) return true;
+        const nameTxt = ((u.firstName || '') + ' ' + (u.lastName || '')).trim().toLowerCase();
+        return nameTxt.indexOf(q) !== -1 || String(u.code || '').indexOf(q) !== -1;
+      });
+      if(!list.length){ c.innerHTML = '<div class="empty">کاربری یافت نشد.</div>'; return; }
+      c.innerHTML = list.map(userCard).join('');
+    }
+
+    function userCard(u){
+      const initial = ((u.firstName || '؟').charAt(0));
+      const statusTxt = u.status === 'فعال' ? '🟢 فعال' : '🔴 غیرفعال';
+      return `
+        <div class="user-card">
+          <div class="user-avatar">${esc(initial)}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:800;color:var(--d)">${esc(u.firstName||'—')} ${esc(u.lastName||'')} ${u.code===me.code?'<span class="badge ok">شما</span>':''}</div>
+            <div style="font-size:0.7rem;color:var(--muted)">کد: ${esc(u.code)} · ${statusTxt} · آخرین ورود: ${esc(u.lastLogin||'—')}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:5px;flex-shrink:0">
+            <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;min-width:150px">
+              <span style="font-size:0.72rem;font-weight:700;color:#334155">🔄 تمدید</span>
+              <button class="perm-switch ${u.hasReactivate?'on':''}" id="ps_setReactivation_${esc(u.code)}" onclick="toggleGrant('${esc(u.code)}', ${u.hasReactivate?'false':'true'}, 'setReactivation')" title="${u.hasReactivate?'لغو مجوز تمدید':'اعطای مجوز تمدید'}">
+                <span class="ps-knob"></span>
+              </button>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;min-width:150px">
+              <span style="font-size:0.72rem;font-weight:700;color:#334155">➕ ثبت پرمیت</span>
+              <button class="perm-switch ${u.hasCreatePermit?'on':''}" id="ps_setCreatePermit_${esc(u.code)}" onclick="toggleGrant('${esc(u.code)}', ${u.hasCreatePermit?'false':'true'}, 'setCreatePermit')" title="${u.hasCreatePermit?'لغو مجوز ثبت':'اعطای مجوز ثبت'}">
+                <span class="ps-knob"></span>
+              </button>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    async function toggleGrant(targetCode, grant, actionType){
+      const act = actionType || 'setReactivation';
+      const btnLock = 'grant_' + act + '_' + targetCode;
       if (inFlightActionKeys.has(btnLock)) return;
       inFlightActionKeys.add(btnLock);
+      const btn = document.getElementById('ps_' + act + '_' + targetCode);
+      if(btn){ btn.disabled = true; }
       try {
         const res = await postAction8Layers({
-          action: 'setReactivation',
+          action: act,
           code: me.code,
           targetCode: targetCode,
           grant: grant
         });
         if(res && res.ok){
-          toast(res.message || 'انجام شد.');
-          if(targetCode === me.code){ me.canReactivate = !!grant; setSession(me); }
-          await loadUsers();
+          toast('✅ ' + (res.message || 'انجام شد.'));
+          if(targetCode === me.code){
+            if(act === 'setReactivation'){ me.canReactivate = !!grant; }
+            else { me.canCreatePermit = !!grant; }
+            setSession(me);
+          }
         } else {
           toast('خطا: ' + ((res && res.error) || 'ناشناخته'));
         }
       } catch(e){
         toast('خطا در ارسال درخواست');
       } finally {
+        if(btn){ btn.disabled = false; }
         inFlightActionKeys.delete(btnLock);
+        await loadUsers();
       }
     }
 
@@ -1784,7 +2094,8 @@
           firstName: data.user.firstName,
           lastName: data.user.lastName,
           isAdmin: !!data.user.isAdmin,
-          canReactivate: !!data.user.canReactivate
+          canReactivate: !!data.user.canReactivate,
+          canCreatePermit: !!data.user.canCreatePermit
         };
 
         if(remember) setSession(me);
@@ -1817,7 +2128,7 @@
       document.getElementById('dot').className = 'dot';
 
       try {
-        const data = await getAction8Layers({ action: 'permits', code: me.code, firstName: me.firstName, lastName: me.lastName }, 4000);
+        const data = await getAction8Layers({ action: 'permits', code: me.code, firstName: me.firstName, lastName: me.lastName }, 15000);
         if(data && data.active === false){
           toast('دسترسی شما معلق شده است.');
           clearAllLocal(); showLogin(); return;
@@ -1830,7 +2141,19 @@
         // به‌روزرسانی مجوز بازفعالسازی از سمت سرور (برای نشست‌های قدیمی)
         if (data.me && typeof data.me.canReactivate === 'boolean') {
           me.canReactivate = data.me.canReactivate;
+          me.canCreatePermit = !!data.me.canCreatePermit;
+          if(data.nextPermitNo) me.nextPermitNo = data.nextPermitNo;
           setSession(me);
+          // نمایش نسخه سرور و هشدار اگر قدیمی باشد
+          const srvVerEl = document.getElementById('srvVer');
+          if(srvVerEl) srvVerEl.textContent = data.apiVersion || '?';
+          if(data.apiVersion && EXPECTED_API_VERSION && data.apiVersion !== EXPECTED_API_VERSION){
+            toast('⚠️ نسخه سرور (' + data.apiVersion + ') با برنامه (' + EXPECTED_API_VERSION + ') یکی نیست! حتماً Deployment جدید بسازید.');
+          }
+          const drCp2 = document.getElementById('drawerCreatePermit');
+          if (drCp2) drCp2.style.display = (me.isAdmin || me.canCreatePermit) ? 'flex' : 'none';
+          const hdrCp2 = document.getElementById('headerCreateBtn');
+          if (hdrCp2) hdrCp2.style.display = (me.isAdmin || me.canCreatePermit) ? 'inline-flex' : 'none';
         }
 
         const validRows = rows.filter(p => !isHeaderRecord(p));
@@ -1853,11 +2176,20 @@
         toast('✓ بروزرسانی موفق: ' + validRows.length + ' پرمیت دریافت شد.');
       } catch(e){
         document.getElementById('dot').className = 'dot err';
+        const online = (typeof navigator !== 'undefined') ? navigator.onLine : true;
+        const msg = online ? 'سرور در دسترس نیست' : 'اینترنت گوشی قطع است';
         if (rows && rows.length) {
           fillCo(); paint();
-          toast('⚠️ عدم اتصال به شبکه؛ اطلاعات محلی رندر شد.');
+          toast('⚠️ ' + msg + '؛ اطلاعات محلی رندر شد.');
         } else {
-          toast('⚠️ قطعی ارتباط با شیت.');
+          toast('⚠️ ' + msg + '.');
+          showError('⚠️ ' + msg,
+            'عملیات: بارگذاری پرمیت‌ها\n' +
+            'آدرس: ' + primaryApiUrl() + '\n' +
+            'اینترنت گوشی: ' + (online ? 'وصل' : 'قطع') + '\n' +
+            'نسخه فایل: ' + APP_FILE_VERSION + '\n' +
+            'خطا: ' + (e.message || e) + '\n' +
+            'زمان: ' + new Date().toLocaleString());
         }
       } finally {
         if(btnHeader) btnHeader.classList.remove('spinning');
@@ -2223,6 +2555,7 @@
       reader.onload = function(e){
         const img = new Image();
         img.onload = function(){
+          // کاهش حجم عکس: ابتدا ابعاد به ۱۰۲۴، سپس کیفیت را تا رسیدن به ~۵۰۰KB کم می‌کنیم
           const canvas = document.createElement('canvas');
           let w = img.width, h = img.height, maxDim = 1024;
 
@@ -2235,7 +2568,28 @@
           const ctx = canvas.getContext('2d');
           ctx.drawImage(img, 0, 0, w, h);
 
-          currentPhotoBase64 = canvas.toDataURL('image/jpeg', 0.8);
+          // کیفیت تطبیقی: از ۰.۸ شروع، هر بار ۰.۰۵ کم کن تا حجم ≤ ~500KB شود (حداقل ۰.۴)
+          let quality = 0.8;
+          let dataUrl = canvas.toDataURL('image/jpeg', quality);
+          while(dataUrl.length > 500 * 1024 * 1.37 && quality > 0.4){   // base64 ≈ 1.37× حجم واقعی
+            quality -= 0.05;
+            dataUrl = canvas.toDataURL('image/jpeg', quality);
+          }
+          // اگر هنوز بزرگ بود، ابعاد را هم کم کن
+          let scaleFactor = 1;
+          while(dataUrl.length > 500 * 1024 * 1.37 && scaleFactor > 0.5){
+            scaleFactor -= 0.1;
+            const nw = Math.round(w * scaleFactor), nh = Math.round(h * scaleFactor);
+            canvas.width = nw; canvas.height = nh;
+            ctx.drawImage(img, 0, 0, nw, nh);
+            dataUrl = canvas.toDataURL('image/jpeg', Math.max(quality, 0.5));
+          }
+
+          currentPhotoBase64 = dataUrl;
+          // نمایش حجم تقریبی به کاربر
+          const sizeKB = Math.round(dataUrl.length * 0.75 / 1024);
+          const kbLabel = document.getElementById('photoSizeLabel');
+          if(kbLabel) kbLabel.textContent = '📦 حجم: ~' + sizeKB + 'KB';
 
           const preview = document.getElementById('photoPreview');
           preview.src = currentPhotoBase64;
@@ -2339,7 +2693,100 @@
 
     function closeHistoryModal(){ lockBodyScroll(false); document.getElementById('historyModal').classList.remove('show'); }
 
-    function openChannelInfoModal(){ lockBodyScroll(true); document.getElementById('channelInfoModal').classList.add('show'); }
+    function hardResetApp(){
+      if(!confirm('همه تنظیمات محلی (قفل لایه، آدرس سفارشی، کش، نشست) پاک شود و برنامه دوباره بارگذاری شود؟')) return;
+      try {
+        localStorage.removeItem(LS_LOCKED_LAYER);
+        localStorage.removeItem('ptw_locked_latency');
+        localStorage.removeItem(LS_API_OVERRIDE);
+        localStorage.removeItem(LS_CACHE);
+        localStorage.removeItem(LS_SESSION);
+        sessionStorage.removeItem(LS_SESSION);
+      } catch(e){}
+      toast('🧹 بازنشانی شد — برنامه دوباره بارگذاری می‌شود...');
+      setTimeout(function(){ location.reload(); }, 600);
+    }
+    async function openChannelInfoModal(){
+      lockBodyScroll(true);
+      document.getElementById('channelInfoModal').classList.add('show');
+      // نمایش نسخه فایل، آدرس فعال و نسخه سرور
+      const fvEl = document.getElementById('modalFileVer');
+      if(fvEl) fvEl.textContent = APP_FILE_VERSION;
+      const urlEl = document.getElementById('modalApiUrl');
+      if(urlEl) urlEl.textContent = primaryApiUrl();
+      const urlInput = document.getElementById('apiUrlInput');
+      if(urlInput) urlInput.value = primaryApiUrl();
+      const srvEl = document.getElementById('modalSrvVer');
+      if(srvEl) srvEl.textContent = (me && me.srvVer) || '—';
+      const okEl = document.getElementById('modalSrvOk');
+      if(okEl){
+        if(me && me.srvVer && EXPECTED_API_VERSION && me.srvVer !== EXPECTED_API_VERSION){
+          okEl.textContent = '⚠️ قدیمی است — Deployment جدید بسازید';
+          okEl.style.color = '#dc2626';
+        } else if(me && me.srvVer){
+          okEl.textContent = '✅ به‌روز';
+          okEl.style.color = '#059669';
+        }
+      }
+    }
+    function saveApiUrl(){
+      const v = (document.getElementById('apiUrlInput').value || '').trim();
+      if(v && v.indexOf('script.google.com') === -1){ toast('⚠️ آدرس باید شامل script.google.com باشد'); return; }
+      setPrimaryApiUrl(v);
+      toast(v ? '✅ آدرس ذخیره شد' : '↩️ آدرس پیش‌فرض برگشت');
+      loadPermits();
+    }
+    function resetApiUrl(){
+      document.getElementById('apiUrlInput').value = DEFAULT_API_URL;
+      setPrimaryApiUrl('');
+      toast('↩️ آدرس پیش‌فرض فعال شد');
+      loadPermits();
+    }
+    async function runConnectivityTest(){
+      const out = document.getElementById('connTestResult');
+      const url = primaryApiUrl();
+      const online = (typeof navigator !== 'undefined') ? navigator.onLine : true;
+      out.innerHTML = '🔍 آدرس: <span dir="ltr" style="font-size:0.68rem">' + esc(url) + '</span><br>' + (online ? '📶 اینترنت گوشی: وصل' : '📶 اینترنت گوشی: قطع!') + '<br>در حال تست...';
+
+      // ===== تست اصلی: fetch GET (روشی که ثابت شده کار می‌کند) =====
+      let html = '';
+      try {
+        const t0 = Date.now();
+        const r = await fetch(url + '?action=ping', { method: 'GET' });
+        const txt = await r.text();
+        const ms = Date.now() - t0;
+        let parsed = null;
+        try { parsed = JSON.parse(txt); } catch(eP){}
+        if(parsed && parsed.ok){
+          html += '✅ <b>اتصال برقرار است!</b> (' + ms + 'ms)<br>';
+          html += 'نسخه سرور: <b>' + esc(parsed.version || '?') + '</b><br>';
+          html += 'زمان سرور: ' + esc(parsed.time || '') + '<br>';
+          if(me) me.srvVer = parsed.version;
+        } else {
+          html += '⚠️ پاسخ غیرمنتظره (کد ' + r.status + '): <span class="mono">' + esc(txt.slice(0, 200)) + '</span><br>';
+        }
+      } catch(eF){
+        html += '❌ fetch GET شکست خورد: ' + esc(eF.message || eF) + '<br>';
+      }
+
+      // ===== تست دوم: fetch POST (همان روشی که لایه ۴ استفاده می‌کند) =====
+      try {
+        const r2 = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'ping' }) });
+        const txt2 = await r2.text();
+        let p2 = null; try { p2 = JSON.parse(txt2); } catch(eP2){}
+        if(p2 && p2.ok){
+          html += '✅ POST هم کار می‌کند (نسخه: ' + esc(p2.version || '?') + ')<br>';
+        } else {
+          html += '⚠️ POST پاسخ غیرمنتظره: ' + esc(txt2.slice(0, 150)) + '<br>';
+        }
+      } catch(eP){
+        html += '❌ POST شکست خورد: ' + esc(eP.message || eP) + '<br>';
+      }
+
+      if(!online) html += '<br>📶 <b>اینترنت گوشی قطع است</b> — اتصال را روشن کنید.';
+      html += '<br>🔗 تست دستی: این لینک را در مرورگر باز کنید — باید متن JSON ببینید:<br><a href="' + esc(url) + '?action=ping" target="_blank" style="color:#1d4ed8;font-size:0.7rem" dir="ltr">' + esc(url) + '?action=ping</a>';
+      out.innerHTML = html;
+    }
     function closeChannelInfoModal(){ lockBodyScroll(false); document.getElementById('channelInfoModal').classList.remove('show'); }
 
     function openSecondaryMirrorModal(){
@@ -2505,5 +2952,5 @@
 
     window.onload = boot;
   </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a28533dd2cc8f9af',t:'MTc4NjI2MjE2OQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a2866e5b4c9d7879',t:'MTc4NjI3NTA1MA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
