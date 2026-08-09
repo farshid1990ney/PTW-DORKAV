@@ -32,7 +32,7 @@
       overscroll-behavior: none;
       overscroll-behavior-y: contain;   /* صریح برای مرورگرهایی که فقط y را می‌فهمند */
       /* جلوگیری از ژست Pull-to-Refresh در سطح مرورگر/WebView */
-      touch-action: pan-x pan-down;      /* فقط اسکرول افقی و رو به پایین مجاز — کشیدن پایین در بالا ممنوع */
+      touch-action: pan-y;               /* اسکرول عمودی (بالا و پایین) آزاد — جلوگیری از رفرش با JS انجام می‌شود */
     }
     body {
       margin: 0;
@@ -868,7 +868,7 @@
   <script>
     const LS_SESSION = 'ptw_lead_zinc_session_v2';
     const EXPECTED_API_VERSION = 'v13.0';   // نسخه سرور مورد انتظار (برای تشخیص Deployment قدیمی)
-    const APP_FILE_VERSION = 'v14.0-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل)
+    const APP_FILE_VERSION = 'v14.1-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل)
     const LS_CACHE = 'ptw_lead_zinc_cache_v2';
     const LS_OFFLINE_QUEUE = 'ptw_offline_queue_v2';
     const LS_SECONDARY_API = 'ptw_secondary_api_url_v2';
@@ -2953,42 +2953,22 @@
           el = el.parentElement;
         }
 
-        // در صفحه اصلی: اگر بالای صفحه هستیم و به پایین می‌کشیم → رفرش ممنوع
+        // در صفحه اصلی: فقط «کشیدن رو به پایین» وقتی «بالای واقعی صفحه» هستیم → رفرش ممنوع
+        // (کشیدن رو به بالا = اسکرول به بالا، کاملاً آزاد است)
         const scrollTop = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
         if(dy > 0 && scrollTop <= 0){
           e.preventDefault();
           e.stopPropagation();
         }
-        // اگر به بالای صفحه برگشتیم و دوباره کشیدیم پایین → باز هم ممنوع
-        if(dy > 0 && scrollTop <= 2){
-          e.preventDefault();
-          e.stopPropagation();
-        }
       }, { passive: false });
 
-      // === هک «۱ پیکسل» برای WebView (webintoapp) ===
-      // وقتی در بالای صفحه هستیم، ۱ پیکسل اسکرول می‌کنیم تا WebView
-      // «بالای صفحه بودن» را تشخیص ندهد و Pull-to-Refresh فعال نشود.
-      function keepScrollOffset(){
-        const st = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
-        if(st <= 0){
-          try { window.scrollTo(0, 1); } catch(eS){}
-          try { document.documentElement.scrollTop = 1; } catch(eS2){}
-          try { document.body.scrollTop = 1; } catch(eS3){}
-        }
-      }
-      // در شروع و هر بار که به بالا برگشتیم، آفست را حفظ کن
-      keepScrollOffset();
-      window.addEventListener('scroll', function(){
-        const st = window.scrollY || document.documentElement.scrollTop || 0;
-        if(st <= 0){ setTimeout(keepScrollOffset, 50); }
-      }, { passive: true });
-      window.addEventListener('load', function(){ setTimeout(keepScrollOffset, 300); });
-      // بعد از بسته شدن مودال‌ها هم (چون به بالا برمی‌گردد)
-      setInterval(function(){
-        const st = window.scrollY || document.documentElement.scrollTop || 0;
-        if(st <= 0){ keepScrollOffset(); }
-      }, 2000);
+      // === جلوگیری از Pull-to-Refresh فقط با JS (بدون هک اسکرول) ===
+      // هک «۱ پیکسل» حذف شد چون اسکرول به بالا را می‌چسباند.
+      // رفرش فقط با preventDefault در touchmove مهار می‌شود و اسکرول عادی کاملاً آزاد است.
+      (function(){
+        // بعد از بستن هر مودال، اگر صفحه واقعاً بالاست، کاری نمی‌کنیم (اسکرول آزاد)
+        // فقط اطمینان: هنگام شروع، جایگزینی برای اسکرول اجباری نیست
+      })();
 
       // جلوگیری از «کشیدن از لبه بالای صفحه» حتی قبل از شروع اسکرول (Chrome اندروید)
       document.addEventListener('touchstart', function(e){
@@ -3071,5 +3051,5 @@
 
     window.onload = boot;
   </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a286f54e28c22a80',t:'MTc4NjI4MDU3OA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a286fa5f2a172a80',t:'MTc4NjI4MDc4NQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
