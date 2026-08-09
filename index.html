@@ -28,7 +28,10 @@
       --accent: #0f766e;
     }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-    html, body { overscroll-behavior: none; }
+    html, body {
+      overscroll-behavior: none;
+      overscroll-behavior-y: contain;   /* صریح برای مرورگرهایی که فقط y را می‌فهمند */
+    }
     body {
       margin: 0;
       font-family: Vazir, Tahoma, sans-serif;
@@ -863,7 +866,7 @@
   <script>
     const LS_SESSION = 'ptw_lead_zinc_session_v2';
     const EXPECTED_API_VERSION = 'v13.0';   // نسخه سرور مورد انتظار (برای تشخیص Deployment قدیمی)
-    const APP_FILE_VERSION = 'v13.7-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل)
+    const APP_FILE_VERSION = 'v13.8-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل)
     const LS_CACHE = 'ptw_lead_zinc_cache_v2';
     const LS_OFFLINE_QUEUE = 'ptw_offline_queue_v2';
     const LS_SECONDARY_API = 'ptw_secondary_api_url_v2';
@@ -2908,30 +2911,65 @@
        (وقتی داخل مودال/منو اسکرول به لبه می‌رسد، صفحه رفرش نشود)
        ============================================================ */
     (function(){
+      // ست کردن overscrollBehavior در JS (بعضی مرورگرها CSS را دیر می‌خوانند)
+      try {
+        document.documentElement.style.overscrollBehavior = 'contain';
+        document.body.style.overscrollBehavior = 'contain';
+        document.documentElement.style.overscrollBehaviorY = 'contain';
+        document.body.style.overscrollBehaviorY = 'contain';
+      } catch(eOS){}
+
       let touchStartY = 0;
+      let touchStartX = 0;
       document.addEventListener('touchstart', function(e){
-        if(e.touches && e.touches[0]) touchStartY = e.touches[0].clientY;
+        if(e.touches && e.touches[0]){
+          touchStartY = e.touches[0].clientY;
+          touchStartX = e.touches[0].clientX;
+        }
       }, { passive: true });
+
       document.addEventListener('touchmove', function(e){
         if(!e.touches || !e.touches[0]) return;
         const dy = e.touches[0].clientY - touchStartY;
-        if(Math.abs(dy) < 8) return;
+        const dx = e.touches[0].clientX - touchStartX;
+        // فقط کشیدن عمودی (نه افقی — تا اسکرول افقی جدول خراب نشود)
+        if(Math.abs(dy) < Math.abs(dx)) return;
+        if(Math.abs(dy) < 4) return;   // آستانه کوچک‌تر برای واکنش سریع‌تر
+
+        // پیدا کردن نزدیک‌ترین کانتینر اسکرول‌پذیر
         let el = (e.target && e.target.nodeType === 1) ? e.target : null;
         while(el && el !== document.documentElement){
           const st = window.getComputedStyle(el);
           const oy = st.overflowY;
           const scrollable = (oy === 'auto' || oy === 'scroll' || oy === 'overlay') && el.scrollHeight > el.clientHeight + 1;
           if(scrollable){
+            // داخل کانتینر اسکرول‌پذیر: فقط اگر به لبه رسیده باشد جلوی «کشش اضافه» را بگیر
             if(dy > 0 && el.scrollTop <= 0){ e.preventDefault(); }
             else if(dy < 0 && el.scrollTop + el.clientHeight >= el.scrollHeight - 1){ e.preventDefault(); }
             return;
           }
           el = el.parentElement;
         }
-        if(dy > 0 && (window.scrollY || document.documentElement.scrollTop || 0) <= 0){
+
+        // در صفحه اصلی: اگر بالای صفحه هستیم و به پایین می‌کشیم → رفرش ممنوع
+        const scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
+        if(dy > 0 && scrollTop <= 0){
+          e.preventDefault();
+        }
+        // اگر به بالای صفحه برگشتیم و دوباره کشیدیم پایین → باز هم ممنوع
+        if(dy > 0 && scrollTop <= 2){
           e.preventDefault();
         }
       }, { passive: false });
+
+      // جلوگیری از «کشیدن از لبه بالای صفحه» حتی قبل از شروع اسکرول (Chrome اندروید)
+      document.addEventListener('touchstart', function(e){
+        const scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
+        if(scrollTop <= 0 && e.touches && e.touches[0] && e.touches[0].clientY < 60){
+          // لمس نزدیک بالای صفحه — برای کشیدن پایین رفرش می‌شود
+          // کاری نمی‌کنیم؛ touchmove تصمیم می‌گیرد
+        }
+      }, { passive: true });
     })();
 
     /* ============================================================
@@ -2986,5 +3024,5 @@
 
     window.onload = boot;
   </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a286d6a7bf05bb8a',t:'MTc4NjI3OTMyMg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a286ddc8e8f2d08b',t:'MTc4NjI3OTYxNA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
