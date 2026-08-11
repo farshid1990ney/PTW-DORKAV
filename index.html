@@ -435,14 +435,14 @@
         <span>➕ ثبت پرمیت دستی</span>
         <span>جدید</span>
       </div>
-        <span>🔑 مجوز تمدید/بازفعالسازی کاربران</span>
+        <span>🔐 مجوزهای کاربران (تک‌تک)</span>
         <span>مدیر</span>
       </div>
       <div class="drawer-item admin-only" onclick="openTable();closeDrawer();">
         <span>📊 گزارش و جدول کل پرمیت‌ها</span>
         <span>📑</span>
       </div>
-      <div class="drawer-item admin-only" onclick="openUnitsManagerModal();closeDrawer();">
+      <div class="drawer-item" id="drawerUnitsManager" style="display:none" onclick="openUnitsManagerModal();closeDrawer();">
         <span>🏢 مدیریت واحدها و پیمانکاران</span>
         <span>تنظیمات</span>
       </div>
@@ -801,23 +801,8 @@
     <div class="panel" style="max-width:680px;max-height:92vh;overflow-y:auto">
       <h2>➕ ثبت گزارش کار و تجهیزات (پرمیت جدید)</h2>
       
-      <!-- نوار اطلاع‌رسانی و بازیابی پیش‌نویس ذخیره‌شده (Option 6) -->
-      <div id="cpDraftAlertBar" style="display:none;background:#fef9c3;border:1.5px solid #facc15;border-radius:12px;padding:12px;margin-bottom:14px;color:#854d0e;font-size:0.82rem">
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-          <div>
-            <strong style="color:#713f12;font-size:0.9rem">📝 پیش‌نویس قبلی در مرورگر یافت شد!</strong>
-            <div style="margin-top:2px" id="cpDraftInfoText">—</div>
-          </div>
-          <div style="display:flex;gap:6px">
-            <button class="btn btn-sm" style="background:#ca8a04;color:#fff;font-weight:800;border:none;padding:4px 12px" onclick="restoreCreatePermitDraft()">📥 بازیابی پیش‌نویس</button>
-            <button class="btn btn-sm" style="background:#fee2e2;color:#991b1b;font-weight:800;border:none;padding:4px 10px" onclick="clearCreatePermitDraft(true)">🗑️ حذف</button>
-          </div>
-        </div>
-      </div>
-
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <span class="hint" style="margin:0">تمام مشخصات به صورت پویا (آبشاری) انتخاب شده و در لحظه اعتبارسنجی می‌شوند.</span>
-        <span id="cpDraftStatusBadge" style="display:none;font-size:0.72rem;background:#e0e7ff;color:#3730a3;padding:3px 8px;border-radius:20px;font-weight:800">💾 ذخیره خودکار در مرورگر</span>
       </div>
       
       <!-- شماره پرمیت - الزامی و بدون شماره پیش‌فرض -->
@@ -1112,7 +1097,21 @@
 
   <script>
     const LS_SESSION = 'ptw_lead_zinc_session_v2';
-    const EXPECTED_API_VERSION = 'v13.0';   // نسخه سرور مورد انتظار (برای تشخیص Deployment قدیمی)
+    const EXPECTED_API_VERSION = 'v16.0';   // نسخه سرور مورد انتظار (برای تشخیص Deployment قدیمی)
+
+    // تعریف ۱۰ مجوز تکی v16 (هم‌خوان با USER_PERMS در بک‌اند Code.gs)
+    const PERM_DEFS = [
+      { key:'createPermit', flag:'hasCreatePermit', can:'canCreatePermit', icon:'➕', label:'ثبت پرمیت جدید' },
+      { key:'approve',      flag:'hasApprove',      can:'canApprove',      icon:'✅', label:'تأیید و فعال‌سازی پرمیت' },
+      { key:'reject',       flag:'hasReject',       can:'canReject',       icon:'❌', label:'رد پرمیت' },
+      { key:'reinspect',    flag:'hasReinspect',    can:'canReinspect',    icon:'🔍', label:'بازرسی مجدد و رفع ایراد' },
+      { key:'close',        flag:'hasClose',        can:'canClose',        icon:'🔒', label:'بستن دستی پرمیت' },
+      { key:'reactivate',   flag:'hasReactivate',   can:'canReactivate',   icon:'🔄', label:'تمدید (حداکثر ۴ بار)' },
+      { key:'patrol',       flag:'hasPatrol',       can:'canPatrol',       icon:'🛡️', label:'ثبت گشت HSE' },
+      { key:'delete',       flag:'hasDelete',       can:'canDelete',       icon:'🗑️', label:'حذف دائم پرمیت' },
+      { key:'units',        flag:'hasUnits',        can:'canUnits',        icon:'🏢', label:'ویرایش واحدها/پیمانکاران' },
+      { key:'analyze',      flag:'hasAnalyze',      can:'canAnalyze',      icon:'🧠', label:'تحلیل هوش مصنوعی (AI)' }
+    ];
     const APP_FILE_VERSION = 'v15.0-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل)
     const LS_CACHE = 'ptw_lead_zinc_cache_v2';
     const LS_OFFLINE_QUEUE = 'ptw_offline_queue_v2';
@@ -1343,7 +1342,7 @@
       }
 
       // ۳) مدیریت عملیات در صف آفلاین
-      const WRITE_ACTIONS = ['approvePermit','rejectPermit','reinspectPermit','closePermit','savePatrolVisit','reactivatePermit','setReactivation','setCreatePermit','createPermit'];
+      const WRITE_ACTIONS = ['approvePermit','rejectPermit','reinspectPermit','closePermit','savePatrolVisit','reactivatePermit','setgrant','setReactivation','setCreatePermit','createPermit','deletepermit','saveunitssettings'];
       if (WRITE_ACTIONS.includes(action)) {
         enqueueOfflineAction(payload);
         updateActiveLayerUI(6, 0);
@@ -1464,9 +1463,12 @@
       if (document.getElementById('mOfflineCnt')) document.getElementById('mOfflineCnt').textContent = q.length;
       if (document.getElementById('queuedItemsCount')) document.getElementById('queuedItemsCount').textContent = q.length;
 
-      // آیتم مدیریت مجوز بازفعالسازی فقط برای مدیر ارشد
+      // آیتم مدیریت مجوزهای کاربران (صدور تیک تکی) فقط برای مدیر ارشد
       const drRe = document.getElementById('drawerAdminReactivate');
       if (drRe) drRe.style.display = (me && me.isAdmin) ? 'flex' : 'none';
+      // آیتم مدیریت واحدها/پیمانکاران برای مدیر یا دارنده مجوز «ویرایش واحدها»
+      const drUn = document.getElementById('drawerUnitsManager');
+      if (drUn) drUn.style.display = (me && (me.isAdmin || me.canUnits)) ? 'flex' : 'none';
       const drCp = document.getElementById('drawerCreatePermit');
       if (drCp) drCp.style.display = (me && (me.isAdmin || me.canCreatePermit)) ? 'flex' : 'none';
       const hdrCp = document.getElementById('headerCreateBtn');
@@ -1474,7 +1476,10 @@
 
       if (me) {
         if (document.getElementById('drawerUserName')) document.getElementById('drawerUserName').textContent = me.firstName + ' ' + me.lastName;
-        if (document.getElementById('drawerUserRole')) document.getElementById('drawerUserRole').textContent = me.isAdmin ? 'مدیر ارشد HSE (' + me.code + ')' : 'کارشناس HSE (' + me.code + ')';
+        if (document.getElementById('drawerUserRole')) {
+          var grantedCnt = me.isAdmin ? PERM_DEFS.length : PERM_DEFS.reduce(function(n2, d2){ return n2 + (me[d2.can] ? 1 : 0); }, 0);
+          document.getElementById('drawerUserRole').textContent = me.isAdmin ? 'مدیر ارشد HSE (' + me.code + ') · دسترسی کامل' : 'کارشناس HSE (' + me.code + ') · ' + grantedCnt + '/' + PERM_DEFS.length + ' مجوز';
+        }
       }
     }
 
@@ -1681,7 +1686,7 @@
       catch(e){ return '00:00'; }
     }
 
-    // محاسبه پیش‌نمایش تمدید — هر تمدید = تا پایان شیفت ۱۲ ساعته جاری (بدون محدودیت روز؛ فقط سقف ۴ بار برای کاربر عادی / نامحدود برای مدیر)
+    // محاسبه پیش‌نمایش تمدید — هر تمدید = تا پایان شیفت ۱۲ ساعته جاری (این عملیات اکنون فقط با مجوز مدیر سامانه انجام می‌شود، بدون سقف تعداد دفعات)
     function computeNextEndPreview(){
       if(!currentReactivatePermit) return null;
       const p = currentReactivatePermit;
@@ -1748,6 +1753,7 @@
     }
 
     function openReactivateModal(permitNo){
+      if (!me || !(me.isAdmin || me.canReactivate)) { toast('⛔ مجوز «تمدید و بازفعال‌سازی» ندارید. این مجوز باید توسط مدیر ارشد در پنل مدیریت برای شما فعال شود.'); return; }
       const p = rows.find(x => String(x.permitNo).trim() === String(permitNo).trim());
       if(!p){ toast('پرمیت یافت نشد'); return; }
       currentReactivatePermit = p;
@@ -1755,9 +1761,7 @@
       reactivateBaseEndDate = base;
       const titleEl = document.querySelector('#reactivateModal h2');
       if (titleEl) {
-        titleEl.textContent = (me && me.isAdmin)
-          ? '🔄 تمدید پرمیت (مدیر ارشد - بدون محدودیت)'
-          : '🔄 تمدید پرمیت تا پایان شیفت (حداکثر ۴ بار)';
+        titleEl.textContent = '🔄 تمدید پرمیت (مدیر ارشد - بدون محدودیت)';
       }
       document.getElementById('reactivatePermitInfo').innerHTML = `
         <strong>شماره پرمیت: ${esc(p.permitNo)}</strong> | مجری: ${esc(getContractor(p))}<br>
@@ -1773,6 +1777,7 @@
 
     async function confirmReactivate(){
       if(!currentReactivatePermit) return;
+      if (!me || !(me.isAdmin || me.canReactivate)) { toast('⛔ مجوز «تمدید و بازفعال‌سازی» ندارید.'); return; }
       const key = 'reactivate_' + currentReactivatePermit.permitNo;
       if (inFlightActionKeys.has(key)) return;
 
@@ -1875,7 +1880,7 @@
     }
 
     function openUnitsManagerModal() {
-      if (!me || !me.isAdmin) { toast('خطا: فقط مدیر ارشد دسترسی دارد.'); return; }
+      if (!me || !(me.isAdmin || me.canUnits)) { toast('⛔ مجوز «ویرایش واحدها و پیمانکاران» ندارید. این مجوز باید توسط مدیر ارشد در پنل مدیریت برای شما فعال شود.'); return; }
       const uEl = document.getElementById('mgrUnitsText');
       const cEl = document.getElementById('mgrContractorsText');
       if(uEl) uEl.value = internalUnitsList.join('\n');
@@ -1889,7 +1894,7 @@
       if(el) el.classList.remove('show');
     }
     async function saveUnitsManagerModal() {
-      if (!me || !me.isAdmin) return;
+      if (!me || !(me.isAdmin || me.canUnits)) { toast('⛔ مجوز «ویرایش واحدها و پیمانکاران» ندارید.'); return; }
       const uLines = document.getElementById('mgrUnitsText').value.split('\n').map(x => x.trim()).filter(Boolean);
       const cLines = document.getElementById('mgrContractorsText').value.split('\n').map(x => x.trim()).filter(Boolean);
       if (!uLines.includes('سایر')) uLines.push('سایر');
@@ -1908,137 +1913,6 @@
       } else {
         toast('❌ خطا در ذخیره تنظیمات');
       }
-    }
-
-    /* ============================================================
-       قابلیت ۶: ذخیره‌سازی پیش‌نویس خودکار فرم در LocalStorage
-       ============================================================ */
-    const PTW_DRAFT_KEY = 'ptw_create_permit_draft_v14';
-
-    function saveCreatePermitDraft() {
-      try {
-        const draft = {
-          cpYear: (document.getElementById('cpYear') || {}).value || '',
-          cpMonth: (document.getElementById('cpMonth') || {}).value || '',
-          cpDay: (document.getElementById('cpDay') || {}).value || '',
-          cpHour: (document.getElementById('cpHour') || {}).value || '',
-          cpMinute: (document.getElementById('cpMinute') || {}).value || '',
-          cpExecType: (document.querySelector('input[name="cpExecType"]:checked') || {}).value || 'internal',
-          cpInternalUnit: (document.getElementById('cpInternalUnit') || {}).value || '',
-          cpMechSub: (document.getElementById('cpMechSub') || {}).value || '',
-          cpElecSub: (document.getElementById('cpElecSub') || {}).value || '',
-          cpCustomUnitInput: (document.getElementById('cpCustomUnitInput') || {}).value || '',
-          cpContractorCompany: (document.getElementById('cpContractorCompany') || {}).value || '',
-          cpCustomContractorInput: (document.getElementById('cpCustomContractorInput') || {}).value || '',
-          cpWorkTypeRadio: (document.querySelector('input[name="cpWorkTypeRadio"]:checked') || {}).value || 'روتین',
-          cpMainLocation: (document.getElementById('cpMainLocation') || {}).value || 'فلوتاسیون',
-          cpSubLocation: (document.getElementById('cpSubLocation') || {}).value || '',
-          cpCustomLocationInput: (document.getElementById('cpCustomLocationInput') || {}).value || '',
-          cpEquipmentSelect: (document.getElementById('cpEquipmentSelect') || {}).value || '',
-          cpCustomEquipInput: (document.getElementById('cpCustomEquipInput') || {}).value || '',
-          cpDesc: (document.getElementById('cpDesc') || {}).value || '',
-          timestamp: new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })
-        };
-        if (draft.cpDesc || draft.cpMainLocation !== 'فلوتاسیون' || draft.cpInternalUnit || draft.cpContractorCompany) {
-          localStorage.setItem(PTW_DRAFT_KEY, JSON.stringify(draft));
-          const badge = document.getElementById('cpDraftStatusBadge');
-          if (badge) badge.style.display = 'inline-block';
-        }
-      } catch(e) {}
-    }
-
-    function checkCreatePermitDraft() {
-      try {
-        const raw = localStorage.getItem(PTW_DRAFT_KEY);
-        const bar = document.getElementById('cpDraftAlertBar');
-        const info = document.getElementById('cpDraftInfoText');
-        if (!bar || !info) return;
-        if (raw) {
-          const draft = JSON.parse(raw);
-          if (draft && (draft.cpDesc || draft.cpMainLocation !== 'فلوتاسیون' || draft.cpInternalUnit)) {
-            info.textContent = 'ذخیره‌شده در ساعت ' + (draft.timestamp || 'اخیر') + (draft.cpDesc ? ' («' + draft.cpDesc.substring(0, 30) + '...»)' : '');
-            bar.style.display = 'block';
-            return;
-          }
-        }
-        bar.style.display = 'none';
-      } catch(e) {
-        const bar = document.getElementById('cpDraftAlertBar');
-        if(bar) bar.style.display = 'none';
-      }
-    }
-
-    function restoreCreatePermitDraft() {
-      try {
-        const raw = localStorage.getItem(PTW_DRAFT_KEY);
-        if (!raw) { toast('پیش‌نویسی یافت نشد'); return; }
-        const d = JSON.parse(raw);
-        if (d.cpYear && document.getElementById('cpYear')) document.getElementById('cpYear').value = d.cpYear;
-        if (d.cpMonth && document.getElementById('cpMonth')) document.getElementById('cpMonth').value = d.cpMonth;
-        if (d.cpDay && document.getElementById('cpDay')) document.getElementById('cpDay').value = d.cpDay;
-        if (d.cpHour && document.getElementById('cpHour')) document.getElementById('cpHour').value = d.cpHour;
-        if (d.cpMinute && document.getElementById('cpMinute')) document.getElementById('cpMinute').value = d.cpMinute;
-
-        if (d.cpExecType) {
-          const r = document.querySelector(`input[name="cpExecType"][value="${d.cpExecType}"]`);
-          if (r) r.checked = true;
-          onExecTypeChange();
-        }
-        if (d.cpInternalUnit && document.getElementById('cpInternalUnit')) {
-          document.getElementById('cpInternalUnit').value = d.cpInternalUnit;
-          onInternalUnitChange();
-        }
-        if (d.cpMechSub && document.getElementById('cpMechSub')) document.getElementById('cpMechSub').value = d.cpMechSub;
-        if (d.cpElecSub && document.getElementById('cpElecSub')) document.getElementById('cpElecSub').value = d.cpElecSub;
-        if (d.cpCustomUnitInput && document.getElementById('cpCustomUnitInput')) document.getElementById('cpCustomUnitInput').value = d.cpCustomUnitInput;
-
-        if (d.cpContractorCompany && document.getElementById('cpContractorCompany')) {
-          document.getElementById('cpContractorCompany').value = d.cpContractorCompany;
-          onContractorChange();
-        }
-        if (d.cpCustomContractorInput && document.getElementById('cpCustomContractorInput')) document.getElementById('cpCustomContractorInput').value = d.cpCustomContractorInput;
-
-        if (d.cpWorkTypeRadio) {
-          const rW = document.querySelector(`input[name="cpWorkTypeRadio"][value="${d.cpWorkTypeRadio}"]`);
-          if (rW) rW.checked = true;
-        }
-
-        if (d.cpMainLocation && document.getElementById('cpMainLocation')) {
-          document.getElementById('cpMainLocation').value = d.cpMainLocation;
-          onMainLocationChange();
-        }
-        if (d.cpSubLocation && document.getElementById('cpSubLocation')) {
-          document.getElementById('cpSubLocation').value = d.cpSubLocation;
-          onSubLocationChange();
-        }
-        if (d.cpCustomLocationInput && document.getElementById('cpCustomLocationInput')) document.getElementById('cpCustomLocationInput').value = d.cpCustomLocationInput;
-
-        if (d.cpEquipmentSelect && document.getElementById('cpEquipmentSelect')) {
-          document.getElementById('cpEquipmentSelect').value = d.cpEquipmentSelect;
-          onEquipmentChange();
-        }
-        if (d.cpCustomEquipInput && document.getElementById('cpCustomEquipInput')) document.getElementById('cpCustomEquipInput').value = d.cpCustomEquipInput;
-
-        if (d.cpDesc !== undefined && document.getElementById('cpDesc')) document.getElementById('cpDesc').value = d.cpDesc;
-
-        const bar = document.getElementById('cpDraftAlertBar');
-        if (bar) bar.style.display = 'none';
-        updateLivePreview();
-        toast('✅ پیش‌نویس ذخیره‌شده با موفقیت بازیابی شد.');
-      } catch(e) {
-        toast('خطا در بازیابی پیش‌نویس');
-      }
-    }
-
-    function clearCreatePermitDraft(showToastMessage = false) {
-      try {
-        localStorage.removeItem(PTW_DRAFT_KEY);
-        const bar = document.getElementById('cpDraftAlertBar');
-        const badge = document.getElementById('cpDraftStatusBadge');
-        if (bar) bar.style.display = 'none';
-        if (badge) badge.style.display = 'none';
-        if (showToastMessage) toast('🗑️ پیش‌نویس ذخیره‌شده حذف شد.');
-      } catch(e) {}
     }
 
     function toEnglishDigits(str) {
@@ -2305,7 +2179,6 @@
         elBadge.textContent = `ریسک: ${score} (${riskLabel})`;
         elBadge.style.background = riskBg;
       }
-      saveCreatePermitDraft();
     }
 
     /* ============================================================
@@ -2332,7 +2205,6 @@
       if (descEl) descEl.value = '';
 
       updateLivePreview();
-      checkCreatePermitDraft();
       lockBodyScroll(true);
       document.getElementById('createPermitModal').classList.add('show');
     }
@@ -2404,7 +2276,6 @@
         });
         if(res && res.ok){
           toast('✅ ' + (res.message || 'پرمیت با موفقیت ثبت شد.'));
-          clearCreatePermitDraft(false);
           closeCreatePermitModal();
           const createdNo = res.permitNo || permitNoInput;
           const nextNum = parseInt(String(createdNo).replace(/\D/g, ''), 10) + 1;
@@ -2436,8 +2307,8 @@
        حذف پرمیت توسط مدیر ارشد (با تاییدیه و ثبت در لاگ حسابرسی)
        ============================================================ */
     async function confirmDeletePermit(permitNo) {
-      if (!me || !me.isAdmin) {
-        toast('خطا: فقط مدیر ارشد مجاز به حذف پرمیت است.');
+      if (!me || !(me.isAdmin || me.canDelete)) {
+        toast('⛔ مجوز «حذف دائم پرمیت» ندارید. این مجوز باید توسط مدیر ارشد در پنل مدیریت برای شما فعال شود.');
         return;
       }
       if (!confirm('⚠️ هشدار امنیتی:\nآیا از حذف کامل و دائمی پرمیت شماره (' + permitNo + ') از شیت و اپلیکیشن اطمینان دارید؟\nاین عملیات در لاگ حسابرسی ثبت گردیده و غیرقابل بازگشت است.')) {
@@ -2496,49 +2367,67 @@
     function userCard(u){
       const initial = ((u.firstName || '؟').charAt(0));
       const statusTxt = u.status === 'فعال' ? '🟢 فعال' : '🔴 غیرفعال';
+      const isSelf = (u.code === me.code);
+      const isAdminUser = !!u.isAdminUser;
+      const grantedCount = PERM_DEFS.reduce(function(n, d){ return n + (u[d.flag] ? 1 : 0); }, 0);
+      let permBlock = '';
+      if (isAdminUser) {
+        permBlock = '<div style="font-size:0.7rem;font-weight:800;color:#7c3aed;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:10px;padding:8px 10px;margin-top:6px">👑 مدیر ارشد سامانه — دسترسی کامل و دائمی به همه عملیات (بدون نیاز به تیک)</div>';
+      } else {
+        permBlock = `
+          <button class="btn btn-w btn-sm" id="permToggleBtn_${esc(u.code)}" onclick="togglePermsPanel('${esc(u.code)}')" style="margin-top:6px;width:100%">🔐 مجوزها (${grantedCount} از ${PERM_DEFS.length}) ▾</button>
+          <div id="permPanel_${esc(u.code)}" style="display:none;margin-top:8px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:8px;flex-direction:column;gap:6px">
+            ${PERM_DEFS.map(function(d){
+              const on = !!u[d.flag];
+              return '<div style="display:flex;align-items:center;gap:8px;justify-content:space-between">' +
+                '<span style="font-size:0.72rem;font-weight:700;color:#334155">' + d.icon + ' ' + esc(d.label) + '</span>' +
+                '<button class="perm-switch ' + (on?'on':'') + '" id="ps_' + d.key + '_' + esc(u.code) + '" onclick="toggleGrant(\'' + esc(u.code) + '\', ' + (on?'false':'true') + ', \'' + d.key + '\')" title="' + (on?'لغو مجوز «' + esc(d.label) + '»':'اعطای مجوز «' + esc(d.label) + '»') + '">' +
+                '<span class="ps-knob"></span></button>' +
+              '</div>';
+            }).join('')}
+          </div>`;
+      }
       return `
         <div class="user-card">
           <div class="user-avatar">${esc(initial)}</div>
           <div style="flex:1;min-width:0">
-            <div style="font-weight:800;color:var(--d)">${esc(u.firstName||'—')} ${esc(u.lastName||'')} ${u.code===me.code?'<span class="badge ok">شما</span>':''}</div>
+            <div style="font-weight:800;color:var(--d)">${esc(u.firstName||'—')} ${esc(u.lastName||'')} ${isSelf?'<span class="badge ok">شما</span>':''}</div>
             <div style="font-size:0.7rem;color:var(--muted)">کد: ${esc(u.code)} · ${statusTxt} · آخرین ورود: ${esc(u.lastLogin||'—')}</div>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:5px;flex-shrink:0">
-            <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;min-width:150px">
-              <span style="font-size:0.72rem;font-weight:700;color:#334155">🔄 تمدید</span>
-              <button class="perm-switch ${u.hasReactivate?'on':''}" id="ps_setReactivation_${esc(u.code)}" onclick="toggleGrant('${esc(u.code)}', ${u.hasReactivate?'false':'true'}, 'setReactivation')" title="${u.hasReactivate?'لغو مجوز تمدید':'اعطای مجوز تمدید'}">
-                <span class="ps-knob"></span>
-              </button>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;min-width:150px">
-              <span style="font-size:0.72rem;font-weight:700;color:#334155">➕ ثبت پرمیت</span>
-              <button class="perm-switch ${u.hasCreatePermit?'on':''}" id="ps_setCreatePermit_${esc(u.code)}" onclick="toggleGrant('${esc(u.code)}', ${u.hasCreatePermit?'false':'true'}, 'setCreatePermit')" title="${u.hasCreatePermit?'لغو مجوز ثبت':'اعطای مجوز ثبت'}">
-                <span class="ps-knob"></span>
-              </button>
-            </div>
+            ${permBlock}
           </div>
         </div>`;
     }
 
-    async function toggleGrant(targetCode, grant, actionType){
-      const act = actionType || 'setReactivation';
-      const btnLock = 'grant_' + act + '_' + targetCode;
+    function togglePermsPanel(code){
+      const el = document.getElementById('permPanel_' + code);
+      if(!el) return;
+      if (el.style.display === 'none' || !el.style.display) {
+        el.style.display = 'flex';
+      } else {
+        el.style.display = 'none';
+      }
+    }
+
+    async function toggleGrant(targetCode, grant, permKey){
+      const key = permKey || 'reactivate';
+      const def = PERM_DEFS.find(function(d){ return d.key === key; }) || { key: key, can: 'can' + key.charAt(0).toUpperCase() + key.slice(1), label: key };
+      const btnLock = 'grant_' + key + '_' + targetCode;
       if (inFlightActionKeys.has(btnLock)) return;
       inFlightActionKeys.add(btnLock);
-      const btn = document.getElementById('ps_' + act + '_' + targetCode);
+      const btn = document.getElementById('ps_' + key + '_' + targetCode);
       if(btn){ btn.disabled = true; }
       try {
         const res = await postAction8Layers({
-          action: act,
+          action: 'setgrant',
           code: me.code,
           targetCode: targetCode,
+          perm: key,
           grant: grant
         });
         if(res && res.ok){
-          toast('✅ ' + (res.message || 'انجام شد.'));
+          toast((grant ? '✅ ' : '⚠️ ') + (res.message || 'انجام شد.'));
           if(targetCode === me.code){
-            if(act === 'setReactivation'){ me.canReactivate = !!grant; }
-            else { me.canCreatePermit = !!grant; }
+            me[def.can] = !!grant;
             setSession(me);
           }
         } else {
@@ -2757,41 +2646,53 @@
         const isRej = isRejectedPermit(p);
         const isAct = isActivePermit(p);
         const isPend = isPendingPermit(p);
-        const deleteBtn = (me && me.isAdmin) ? `<button class="btn" style="background:#ef4444;color:#fff;border:none" onclick="confirmDeletePermit('${esc(p.permitNo)}')">🗑️ حذف دائم (مدیر)</button>` : '';
+        const canApproveP   = !!(me && (me.isAdmin || me.canApprove));
+        const canRejectP    = !!(me && (me.isAdmin || me.canReject));
+        const canReinspectP = !!(me && (me.isAdmin || me.canReinspect));
+        const canCloseP     = !!(me && (me.isAdmin || me.canClose));
+        const canPatrolP    = !!(me && (me.isAdmin || me.canPatrol));
+        const canDeleteP    = !!(me && (me.isAdmin || me.canDelete));
+        const canAnalyzeP   = !!(me && (me.isAdmin || me.canAnalyze));
+        const canReactP     = !!(me && (me.isAdmin || me.canReactivate));
+        const deleteBtn = canDeleteP ? `<button class="btn" style="background:#ef4444;color:#fff;border:none" onclick="confirmDeletePermit('${esc(p.permitNo)}')">🗑️ حذف دائم</button>` : '';
+        const aiBtn = canAnalyzeP ? `<button class="btn btn-ai" onclick="openAIModal('${esc(p.permitNo)}')">🧠 تحلیل AI</button>` : '';
 
         let actionButtons = '';
 
         if(isPend) {
+          const approveBtn = canApproveP ? `<button class="btn btn-g" onclick="approvePermit('${esc(p.permitNo)}')">✅ تأیید و فعال‌سازی</button>` : '';
+          const rejectBtn = canRejectP ? `<button class="btn btn-x" onclick="openRejectPermitModal('${esc(p.permitNo)}')">❌ رد پرمیت</button>` : '';
           actionButtons = `
-            <button class="btn btn-g" onclick="approvePermit('${esc(p.permitNo)}')">✅ تأیید و فعال‌سازی</button>
-            <button class="btn btn-x" onclick="openRejectPermitModal('${esc(p.permitNo)}')">❌ رد پرمیت</button>
-            <button class="btn btn-ai" onclick="openAIModal('${esc(p.permitNo)}')">🧠 تحلیل AI</button>
+            ${approveBtn}
+            ${rejectBtn}
+            ${aiBtn}
             ${deleteBtn}
           `;
         } else if(isAct) {
+          const patrolBtn = canPatrolP ? `<button class="btn btn-p" onclick="openPatrolModal('${esc(p.permitNo)}')">🛡️ ثبت گشت HSE</button>` : '';
+          const closeBtn = canCloseP ? `<button class="btn btn-x" onclick="openClosePermitModal('${esc(p.permitNo)}')">🔒 بستن پرمیت (اتمام کار)</button>` : '';
           actionButtons = `
-            <button class="btn btn-p" onclick="openPatrolModal('${esc(p.permitNo)}')">🛡️ ثبت گشت HSE</button>
-            <button class="btn btn-x" onclick="openClosePermitModal('${esc(p.permitNo)}')">🔒 بستن پرمیت (اتمام کار)</button>
-            <button class="btn btn-ai" onclick="openAIModal('${esc(p.permitNo)}')">🧠 تحلیل AI</button>
+            ${patrolBtn}
+            ${closeBtn}
+            ${aiBtn}
             <button class="btn btn-w" onclick="openHistoryModal('${esc(p.permitNo)}')">📋 تاریخچه</button>
             ${deleteBtn}
           `;
         } else if(isRej) {
-          const canRe = !!(me && me.canReactivate);
-          const reBtn = canRe ? `<button class="btn btn-p" onclick="openReactivateModal('${esc(p.permitNo)}')">🔄 تمدید و بازفعال‌سازی</button>` : '';
+          const reBtn = canReactP ? `<button class="btn btn-p" onclick="openReactivateModal('${esc(p.permitNo)}')">🔄 تمدید و بازفعال‌سازی</button>` : '';
+          const reinspectBtn = canReinspectP ? `<button class="btn btn-w" onclick="openReinspectModal('${esc(p.permitNo)}')">🔄 بازرسی مجدد و رفع ایراد</button>` : '';
           actionButtons = `
-            <button class="btn btn-w" onclick="openReinspectModal('${esc(p.permitNo)}')">🔄 بازرسی مجدد و رفع ایراد</button>
+            ${reinspectBtn}
             ${reBtn}
-            <button class="btn btn-ai" onclick="openAIModal('${esc(p.permitNo)}')">🧠 تحلیل AI</button>
+            ${aiBtn}
             ${deleteBtn}
           `;
         } else {
-          const canRe = !!(me && me.canReactivate);
-          const reBtn = canRe ? `<button class="btn btn-p" onclick="openReactivateModal('${esc(p.permitNo)}')">🔄 تمدید و بازفعال‌سازی</button>` : '';
+          const reBtn = canReactP ? `<button class="btn btn-p" onclick="openReactivateModal('${esc(p.permitNo)}')">🔄 تمدید و بازفعال‌سازی</button>` : '';
           actionButtons = `
             ${reBtn}
             <button class="btn btn-w" onclick="openHistoryModal('${esc(p.permitNo)}')">📋 تاریخچه بازدیدها</button>
-            <button class="btn btn-ai" onclick="openAIModal('${esc(p.permitNo)}')">🧠 تحلیل AI</button>
+            ${aiBtn}
             ${deleteBtn}
           `;
         }
@@ -2880,10 +2781,9 @@
           code: data.user.code,
           firstName: data.user.firstName,
           lastName: data.user.lastName,
-          isAdmin: !!data.user.isAdmin,
-          canReactivate: !!data.user.canReactivate,
-          canCreatePermit: !!data.user.canCreatePermit
+          isAdmin: !!data.user.isAdmin
         };
+        PERM_DEFS.forEach(function(d){ me[d.can] = !!data.user[d.can]; });
 
         if(remember) setSession(me);
 
@@ -2905,7 +2805,7 @@
 
     async function loadPermits(){
       if(!me) return;
-      if(me && me.isAdmin && typeof loadUnitsSettings === 'function') {
+      if(me && (me.isAdmin || me.canUnits || me.canCreatePermit) && typeof loadUnitsSettings === 'function') {
         loadUnitsSettings();
       }
 
@@ -2929,10 +2829,9 @@
         rows = Array.isArray(data.rows) ? data.rows : [];
         localStorage.setItem(LS_CACHE, JSON.stringify(rows));
 
-        // به‌روزرسانی مجوز بازفعالسازی از سمت سرور (برای نشست‌های قدیمی)
-        if (data.me && typeof data.me.canReactivate === 'boolean') {
-          me.canReactivate = data.me.canReactivate;
-          me.canCreatePermit = !!data.me.canCreatePermit;
+        // به‌روزرسانی همه ۱۰ مجوز از سمت سرور (سیستم مجوزهای تکی v16)
+        if (data.me) {
+          PERM_DEFS.forEach(function(d){ if (typeof data.me[d.can] === 'boolean') me[d.can] = data.me[d.can]; });
           if(data.nextPermitNo) me.nextPermitNo = data.nextPermitNo;
           setSession(me);
           // نمایش نسخه سرور و هشدار اگر قدیمی باشد
@@ -2988,6 +2887,7 @@
     }
 
     async function approvePermit(permitNo){
+      if (!me || !(me.isAdmin || me.canApprove)) { toast('⛔ مجوز «تأیید پرمیت» ندارید. این مجوز باید توسط مدیر ارشد در پنل مدیریت برای شما فعال شود.'); return; }
       const key = 'approve_' + permitNo;
       if (inFlightActionKeys.has(key)) return;
 
@@ -3025,6 +2925,7 @@
     }
 
     function openRejectPermitModal(permitNo){
+      if (!me || !(me.isAdmin || me.canReject)) { toast('⛔ مجوز «رد پرمیت» ندارید. این مجوز باید توسط مدیر ارشد در پنل مدیریت برای شما فعال شود.'); return; }
       const p = rows.find(x => String(x.permitNo).trim() === String(permitNo).trim());
       if(!p){ toast('پرمیت یافت نشد'); return; }
 
@@ -3045,6 +2946,7 @@
 
     async function confirmRejectPermit(){
       if(!currentRejectPermit) return;
+      if (!me || !(me.isAdmin || me.canReject)) { toast('⛔ مجوز «رد پرمیت» ندارید.'); return; }
 
       const key = 'reject_' + currentRejectPermit.permitNo;
       if (inFlightActionKeys.has(key)) return;
@@ -3133,6 +3035,7 @@
     }
 
     function openReinspectModal(permitNo){
+      if (!me || !(me.isAdmin || me.canReinspect)) { toast('⛔ مجوز «بازرسی مجدد» ندارید. این مجوز باید توسط مدیر ارشد در پنل مدیریت برای شما فعال شود.'); return; }
       const p = rows.find(x => String(x.permitNo).trim() === String(permitNo).trim());
       if(!p){ toast('پرمیت یافت نشد'); return; }
 
@@ -3156,6 +3059,7 @@
 
     async function confirmReinspect(targetStatus){
       if(!currentReinspectPermit) return;
+      if (!me || !(me.isAdmin || me.canReinspect)) { toast('⛔ مجوز «بازرسی مجدد» ندارید.'); return; }
 
       const notes = (document.getElementById('reinspectNotesInput').value || '').trim();
       if(!notes && targetStatus === 'فعال'){
@@ -3202,6 +3106,7 @@
     }
 
     function openClosePermitModal(permitNo){
+      if (!me || !(me.isAdmin || me.canClose)) { toast('⛔ مجوز «بستن دستی پرمیت» ندارید. این مجوز باید توسط مدیر ارشد در پنل مدیریت برای شما فعال شود.'); return; }
       const p = rows.find(x => String(x.permitNo).trim() === String(permitNo).trim());
       if(!p){ toast('پرمیت یافت نشد'); return; }
 
@@ -3222,6 +3127,7 @@
 
     async function confirmClosePermit(){
       if(!currentClosePermit) return;
+      if (!me || !(me.isAdmin || me.canClose)) { toast('⛔ مجوز «بستن دستی پرمیت» ندارید.'); return; }
 
       const key = 'close_' + currentClosePermit.permitNo;
       if (inFlightActionKeys.has(key)) return;
@@ -3262,6 +3168,7 @@
 
     /* تحلیل هوش مصنوعی با تایم‌اوت ۱۵ ثانیه‌ای جهت پردازش کامل Groq/Gemini AI */
     async function openAIModal(permitNo){
+      if (!me || !(me.isAdmin || me.canAnalyze)) { toast('⛔ مجوز «تحلیل هوش مصنوعی» ندارید. این مجوز باید توسط مدیر ارشد در پنل مدیریت برای شما فعال شود.'); return; }
       const p = rows.find(x => String(x.permitNo).trim() === String(permitNo).trim());
       if(!p){ toast('پرمیت یافت نشد'); return; }
 
@@ -3320,6 +3227,7 @@
     function closeAIModal(){ lockBodyScroll(false); document.getElementById('aiModal').classList.remove('show'); }
 
     function openPatrolModal(permitNo){
+      if (!me || !(me.isAdmin || me.canPatrol)) { toast('⛔ مجوز «ثبت گشت HSE» ندارید. این مجوز باید توسط مدیر ارشد در پنل مدیریت برای شما فعال شود.'); return; }
       const p = rows.find(x => String(x.permitNo).trim() === String(permitNo).trim());
       if(!p){ toast('پرمیت یافت نشد'); return; }
 
@@ -3334,7 +3242,8 @@
       document.getElementById('patrolNotes').value = '';
       document.getElementById('photoPreview').style.display = 'none';
       document.getElementById('patrolPhotoInput').value = '';
-      if (document.getElementById('closePermitAlso')) document.getElementById('closePermitAlso').checked = false;
+      const cpa = document.getElementById('closePermitAlso');
+      if (cpa) { cpa.checked = false; if (cpa.parentElement) cpa.parentElement.style.display = (me && (me.isAdmin || me.canClose)) ? 'flex' : 'none'; }
 
       lockBodyScroll(true);
       document.getElementById('patrolModal').classList.add('show');
@@ -3397,6 +3306,7 @@
 
     async function submitPatrolVisit(){
       if(!currentPatrolPermit) return;
+      if (!me || !(me.isAdmin || me.canPatrol)) { toast('⛔ مجوز «ثبت گشت HSE» ندارید.'); return; }
 
       const key = 'patrol_' + currentPatrolPermit.permitNo;
       if (inFlightActionKeys.has(key)) return;
@@ -3657,7 +3567,7 @@
           <td style="color:var(--danger)">${esc(p.techReject||'—')}</td>
           <td style="color:#059669;font-weight:600">${esc(p.reactivatedBy||'—')}</td>
           <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis">${esc(p.desc||'—')}</td>
-          <td>${(me && me.isAdmin) ? `<button class="btn" style="background:#ef4444;color:#fff;padding:2px 8px;font-size:0.75rem;border:none" onclick="confirmDeletePermit('${esc(p.permitNo)}')">🗑️ حذف</button>` : '—'}</td>
+          <td>${(me && (me.isAdmin || me.canDelete)) ? `<button class="btn" style="background:#ef4444;color:#fff;padding:2px 8px;font-size:0.75rem;border:none" onclick="confirmDeletePermit('${esc(p.permitNo)}')">🗑️ حذف</button>` : '—'}</td>
         </tr>
       `).join('');
       document.getElementById('tableModal').classList.add('show');
@@ -3832,5 +3742,5 @@
 
     window.onload = boot;
   </script>
-</body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a2950c381e76ebae',t:'MTc4NjQyODMxNw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
