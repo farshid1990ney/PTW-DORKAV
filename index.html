@@ -478,10 +478,7 @@
         <span>🖼️ لوگوی سامانه</span>
         <span>آپلود</span>
       </div>
-      <div class="drawer-item admin-only" onclick="toggleSuccessBeep();closeDrawer();">
-        <span>🔔 بیپ موفقیت (فقط گوشی عمل‌کننده)</span>
-        <span id="beepStateBadge">—</span>
-      </div>
+
       <div class="drawer-item admin-only" id="drawerAdminReactivate" style="display:none" onclick="openUsersModal();closeDrawer();">
         <span>🔐 مجوزهای کاربران (تک‌تک)</span>
         <span>مدیر</span>
@@ -526,9 +523,13 @@
         <span>ℹ️ راهنمای شیفت‌های ۱۲ ساعته</span>
         <span>راهنما</span>
       </div>
-      <div class="drawer-item" onclick="toggleNotifications();closeDrawer();">
-        <span>🔔 فعال‌سازی اعلان مرورگر</span>
-        <span>اعلان</span>
+      <div class="drawer-item" id="drawerMyReport" onclick="openMyReportModal();closeDrawer();">
+        <span>📊 گزارش عملکرد من (روز / ماه)</span>
+        <span>من</span>
+      </div>
+      <div class="drawer-item" onclick="toggleSuccessBeep();closeDrawer();">
+        <span>🔔 صدای موفقیت روی گوشی من</span>
+        <span id="beepStateBadge">خاموش</span>
       </div>
       
       <div class="drawer-item" style="color:var(--danger);margin-top:16px;background:#fef2f2" onclick="doLogout();closeDrawer();">
@@ -1188,6 +1189,15 @@
     </div>
   </div>
 
+  <div class="modal" id="myReportModal">
+    <div class="panel" style="max-width:560px">
+      <h2>📊 گزارش عملکرد من</h2>
+      <p class="hint">فقط کارهایی که خودتان انجام داده‌اید، با شماره پرمیت‌ها — امروز و این ماه.</p>
+      <div id="myReportBody"></div>
+      <button class="btn btn-d btn-block" style="margin-top:10px" onclick="closeMyReportModal()">بستن</button>
+    </div>
+  </div>
+
   <!-- مدال تمدید یک‌روزه و بازفعال‌سازی پرمیت (نیازمند مجوز مدیر ارشد) -->
   <div class="modal" id="reactivateModal">
     <div class="panel">
@@ -1267,9 +1277,10 @@
       { key:'delete',       flag:'hasDelete',       can:'canDelete',       icon:'🗑️', label:'حذف دائم پرمیت' },
       { key:'units',        flag:'hasUnits',        can:'canUnits',        icon:'🏢', label:'ویرایش واحدها/پیمانکاران' },
       { key:'analyze',      flag:'hasAnalyze',      can:'canAnalyze',      icon:'🧠', label:'تحلیل هوش مصنوعی (AI)' },
-      { key:'export',       flag:'hasExport',       can:'canExport',       icon:'📤', label:'خروجی اکسل تمام پرمیت‌ها' }
+      { key:'export',       flag:'hasExport',       can:'canExport',       icon:'📤', label:'خروجی اکسل تمام پرمیت‌ها' },
+      { key:'myreport',     flag:'hasMyreport',     can:'canMyreport',     icon:'📊', label:'گزارش عملکرد شخصی (روز/ماه)', defaultOn:true }
     ];
-    const APP_FILE_VERSION = 'v16.22-html';
+    const APP_FILE_VERSION = 'v16.25-html';
     const LS_CACHE = 'ptw_lead_zinc_cache_v2';
     const LS_OFFLINE_QUEUE = 'ptw_offline_queue_v2';
     const LS_SECONDARY_API = 'ptw_secondary_api_url_v2';
@@ -1593,8 +1604,8 @@
     /* ============================================================
        اتصال مستقیم لایه ۴ (Direct POST با پشتیبانی هوشمند)
        ============================================================ */
-    const WRITE_ACTIONS = ['approvePermit','rejectPermit','reinspectPermit','closePermit','savePatrolVisit','reactivatePermit','setgrant','setReactivation','setCreatePermit','createPermit','deletepermit','saveunitssettings','savehsecatalog','setuseraccess','savelogo','exportpermits'];
-    const READ_LIGHT = ['permits','visits','ping','test','listusers','getunitssettings','analyzepermit','gethsecatalog'];
+    const WRITE_ACTIONS = ['approvePermit','rejectPermit','reinspectPermit','closePermit','savePatrolVisit','reactivatePermit','setgrant','setReactivation','setCreatePermit','createPermit','deletepermit','saveunitssettings','savehsecatalog','setuseraccess','savelogo'];
+    const READ_LIGHT = ['permits','visits','ping','test','listusers','getunitssettings','analyzepermit','gethsecatalog','mystats','checkin'];
     let probeInFlight = null;
     let lastProbeAt = 0;
 
@@ -2016,6 +2027,8 @@
       if (hdrCp) hdrCp.style.display = (me && (me.isAdmin || me.canCreatePermit)) ? 'inline-flex' : 'none';
       const drEx = document.getElementById('drawerExportExcel');
       if (drEx) drEx.style.display = (me && (me.isAdmin || me.canExport)) ? 'flex' : 'none';
+      const drRep = document.getElementById('drawerMyReport');
+      if (drRep) drRep.style.display = (me && (me.isAdmin || me.canMyreport !== false)) ? 'flex' : 'none';
 
       if (me) {
         if (document.getElementById('drawerUserName')) document.getElementById('drawerUserName').textContent = me.firstName + ' ' + me.lastName;
@@ -2167,33 +2180,116 @@
     }
 
 
+    const LS_SOUND = 'ptw_sound_on_v1';
     let successBeepOn = false;
+    try { successBeepOn = localStorage.getItem(LS_SOUND) === '1'; } catch(eS){}
+    function persistSoundPref(){
+      try { localStorage.setItem(LS_SOUND, successBeepOn ? '1' : '0'); } catch(e){}
+    }
     function updateBeepBadge(){
       const el = document.getElementById('beepStateBadge');
       if(el) el.textContent = successBeepOn ? 'روشن' : 'خاموش';
     }
-    function playSuccessBeep(){
-      if(!successBeepOn) return;
+    function unlockPhoneAudio(){
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if(Ctx){
+          if(!window.__ptwAudio) window.__ptwAudio = new Ctx();
+          if(window.__ptwAudio.state === 'suspended') window.__ptwAudio.resume();
+        }
+      } catch(e1){}
+      try {
+        if(!window.__ptwSilentAudio){
+          window.__ptwSilentAudio = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA');
+          window.__ptwSilentAudio.setAttribute('playsinline','');
+          window.__ptwSilentAudio.volume = 0.01;
+        }
+        const p = window.__ptwSilentAudio.play();
+        if(p && p.catch) p.catch(function(){});
+      } catch(e2){}
+    }
+    function buildNotifyWav(){
+      const sr = 22050, dur = 0.42, n = Math.floor(sr * dur);
+      const data = new Uint8Array(44 + n * 2);
+      const dv = new DataView(data.buffer);
+      function wstr(o,s){ for(let i=0;i<s.length;i++) data[o+i]=s.charCodeAt(i); }
+      wstr(0,'RIFF'); dv.setUint32(4, 36+n*2, true); wstr(8,'WAVE'); wstr(12,'fmt ');
+      dv.setUint32(16,16,true); dv.setUint16(20,1,true); dv.setUint16(22,1,true);
+      dv.setUint32(24,sr,true); dv.setUint32(28,sr*2,true); dv.setUint16(32,2,true); dv.setUint16(34,16,true);
+      wstr(36,'data'); dv.setUint32(40,n*2,true);
+      for(let i=0;i<n;i++){
+        const t = i / sr;
+        const f = (t < 0.16) ? 880 : ((t < 0.28) ? 1175 : 1397);
+        const env = Math.min(1, t*40) * Math.min(1, (dur-t)*18);
+        const s = Math.sin(2*Math.PI*f*t) * 0.32 * env;
+        dv.setInt16(44+i*2, Math.max(-1,Math.min(1,s))*32767, true);
+      }
+      return URL.createObjectURL(new Blob([data], {type:'audio/wav'}));
+    }
+    function playWavDing(){
+      try {
+        if(!window.__ptwDingUrl) window.__ptwDingUrl = buildNotifyWav();
+        const a = new Audio(window.__ptwDingUrl);
+        a.setAttribute('playsinline','');
+        a.volume = 0.85;
+        const p = a.play();
+        if(p && p.catch) p.catch(function(){ playOscFallback(); });
+      } catch(e){ playOscFallback(); }
+    }
+    function playOscFallback(){
       try {
         const Ctx = window.AudioContext || window.webkitAudioContext;
         if(!Ctx) return;
         if(!window.__ptwAudio) window.__ptwAudio = new Ctx();
         const ctx = window.__ptwAudio;
         if(ctx.state === 'suspended') ctx.resume();
-        const o = ctx.createOscillator();
-        const g = ctx.createGain();
-        o.type = 'sine';
-        o.frequency.setValueAtTime(880, ctx.currentTime);
-        o.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.08);
-        g.gain.setValueAtTime(0.0001, ctx.currentTime);
-        g.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + 0.02);
-        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
-        o.connect(g); g.connect(ctx.destination);
-        o.start();
-        o.stop(ctx.currentTime + 0.2);
+        const now = ctx.currentTime;
+        const notes = [880, 1175, 1397];
+        notes.forEach(function(freq, i){
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.type = 'sine';
+          o.frequency.value = freq;
+          const t0 = now + i * 0.12;
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.exponentialRampToValueAtTime(0.16, t0 + 0.02);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.14);
+          o.connect(g); g.connect(ctx.destination);
+          o.start(t0); o.stop(t0 + 0.15);
+        });
       } catch(e){}
     }
-    const _toastRaw = (typeof toast === 'function') ? toast : null;
+    function vibratePhone(){
+      try { if(navigator.vibrate) navigator.vibrate([90, 50, 140]); } catch(e){}
+      try {
+        if(window.WTN){
+          if(typeof window.WTN.vibrate === 'function') window.WTN.vibrate(200);
+          else if(typeof window.WTN.vibration === 'function') window.WTN.vibration(200);
+        }
+      } catch(e2){}
+    }
+    function fireSystemNotify(title, body){
+      const t = title || 'سامانه پرمیت HSE';
+      const b = body || 'عملیات با موفقیت ثبت شد';
+      try {
+        if(window.WTN && typeof window.WTN.showNotification === 'function'){
+          window.WTN.showNotification({ title: t, text: b, body: b });
+        }
+      } catch(eW){}
+      try {
+        if(!('Notification' in window)) return;
+        if(Notification.permission !== 'granted') return;
+        const n = new Notification(t, { body: b, silent: false, tag: 'ptw-ok', vibrate: [90,50,140] });
+        setTimeout(function(){ try { n.close(); } catch(eC){} }, 3500);
+      } catch(eN){}
+    }
+    function playSuccessBeep(detail){
+      if(!successBeepOn) return;
+      unlockPhoneAudio();
+      vibratePhone();
+      playWavDing();
+      fireSystemNotify('سامانه پرمیت HSE', detail || 'عملیات شما ثبت شد');
+    }
     function toast(msg){
       const t = document.getElementById('toast');
       if(t){
@@ -2203,17 +2299,29 @@
       }
     }
     async function toggleSuccessBeep(){
-      if(!me || !me.isAdmin){ toast('فقط مدیر'); return; }
-      try{
-        const res = await callAPI('setbeep', { code: me.code, on: !successBeepOn });
-        if(res && res.ok){
-          successBeepOn = !!res.beep;
-          updateBeepBadge();
-          toast(res.message || (successBeepOn?'بیپ روشن شد':'بیپ خاموش شد'));
-          if(successBeepOn) playSuccessBeep();
-        } else toast('خطا: ' + ((res && res.error)||''));
-      }catch(e){ toast('خطا در تنظیم بیپ'); }
+      unlockPhoneAudio();
+      successBeepOn = !successBeepOn;
+      persistSoundPref();
+      updateBeepBadge();
+      if(successBeepOn){
+        let note = 'صدای موفقیت روی همین گوشی روشن شد.';
+        try {
+          if('Notification' in window && Notification.permission === 'default'){
+            const perm = await Notification.requestPermission();
+            if(perm === 'granted') note += ' اعلان سیستم (صدای پیامک گوشی) هم فعال شد.';
+            else note += ' اگر اعلان را رد کردید، همان بیپ داخل برنامه پخش می‌شود.';
+          } else if('Notification' in window && Notification.permission === 'granted'){
+            note += ' اعلان سیستم هم فعال است.';
+          }
+        } catch(eP){}
+        toast(note);
+        playSuccessBeep('تست صدا — اگر شنیدید تنظیم درست است');
+      } else {
+        toast('صدای موفقیت خاموش شد.');
+      }
     }
+    document.addEventListener('touchstart', unlockPhoneAudio, {passive:true});
+    document.addEventListener('click', unlockPhoneAudio, {passive:true});
 
 
 
@@ -2621,12 +2729,108 @@
         closeHseCatalogModal();
       } else toast('خطا: ' + ((res&&res.error)||''));
     }
-    async function logAppCheck(kind){
+    async function collectDeviceIps(){
+      const out = { public:'', locals:[], ua: (navigator.userAgent||'') };
+      try {
+        const r = await fetch('https://api.ipify.org?format=json', { cache:'no-store' });
+        const j = await r.json();
+        if(j && j.ip) out.public = String(j.ip);
+      } catch(e1){}
+      try {
+        const r6 = await fetch('https://api64.ipify.org?format=json', { cache:'no-store' });
+        const j6 = await r6.json();
+        if(j6 && j6.ip && String(j6.ip) !== out.public){
+          out.public = out.public ? (out.public + ', ' + j6.ip) : String(j6.ip);
+        }
+      } catch(e2){}
+      try {
+        await new Promise(function(resolve){
+          const RTC = window.RTCPeerConnection || window.webkitRTCPeerConnection;
+          if(!RTC){ resolve(); return; }
+          const pc = new RTC( { iceServers: [] } );
+          const done = function(){ try{ pc.close(); }catch(x){} resolve(); };
+          try { pc.createDataChannel(''); } catch(eD){}
+          pc.onicecandidate = function(ev){
+            if(!ev || !ev.candidate){ done(); return; }
+            const c = String(ev.candidate.candidate || '');
+            const m4 = c.match(/(\d{1,3}(?:\.\d{1,3}){3})/);
+            if(m4 && m4[1] && m4[1].indexOf('127.')!==0 && out.locals.indexOf(m4[1])===-1) out.locals.push(m4[1]);
+          };
+          pc.createOffer().then(function(o){ return pc.setLocalDescription(o); }).catch(function(){ done(); });
+          setTimeout(done, 1100);
+        });
+      } catch(e3){}
+      return out;
+    }
+    async function logAppCheck(kind, force){
       if(!me || !me.code) return;
       const now = Date.now();
-      if(window.__lastCheckinAt && (now - window.__lastCheckinAt) < 90000) return;
+      const wait = (kind === 'refresh') ? 8000 : 90000;
+      if(!force && window.__lastCheckinAt && (now - window.__lastCheckinAt) < wait) return;
       window.__lastCheckinAt = now;
-      try { await callAPI('checkin', { code: me.code, kind: kind || 'open' }, 8000); } catch(e){}
+      try {
+        const net = await collectDeviceIps();
+        await callAPI('checkin', {
+          code: me.code,
+          kind: kind || 'open',
+          ip: net.public,
+          ips: (net.locals||[]).join(', '),
+          ua: net.ua
+        }, 10000);
+      } catch(e){}
+    }
+    function playRefreshSound(){
+      try {
+        unlockPhoneAudio();
+        playWavDing();
+        vibratePhone();
+      } catch(e){}
+    }
+    function fmtPermitList(arr){
+      if(!arr || !arr.length) return '—';
+      return arr.map(function(n){ return '<span class="badge wait" style="margin:2px">'+esc(n)+'</span>'; }).join(' ');
+    }
+    function renderMyBucket(b){
+      if(!b) return '';
+      const rows = [
+        ['ثبت پرمیت', b.created],
+        ['تأیید / فعال', b.approved],
+        ['رد شده', b.rejected],
+        ['بسته شده', b.closed],
+        ['تمدید', b.reactivated],
+        ['گشت HSE', b.patrol],
+        ['بازرسی مجدد', b.reinspect]
+      ];
+      let html = '<div style="font-size:0.78rem;color:var(--muted);margin-bottom:8px">ورود/چک برنامه: <b>'+esc(String(b.opens||0))+'</b> بار</div>';
+      html += rows.map(function(r){
+        const list = r[1] || [];
+        return '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:8px 10px;margin-bottom:8px"><div style="display:flex;justify-content:space-between;font-weight:800;color:var(--d);margin-bottom:4px"><span>'+esc(r[0])+'</span><span>'+list.length+'</span></div><div>'+fmtPermitList(list)+'</div></div>';
+      }).join('');
+      return html;
+    }
+    async function openMyReportModal(){
+      if(!me){ toast('ابتدا وارد شوید'); return; }
+      lockBodyScroll(true);
+      document.getElementById('myReportModal').classList.add('show');
+      const box = document.getElementById('myReportBody');
+      box.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted)">در حال جمع‌آوری گزارش شما...</div>';
+      try {
+        const res = await callAPI('mystats', { code: me.code }, 15000);
+        if(!res || !res.ok){ box.innerHTML = '<div style="color:var(--danger);text-align:center">خطا: '+esc((res&&res.error)||'سرور')+'</div>'; return; }
+        box.innerHTML =
+          '<div style="font-weight:800;color:var(--d);margin-bottom:8px">👤 '+esc(res.name|| (me.firstName+' '+me.lastName))+'</div>'+
+          '<div style="font-weight:900;margin:10px 0 6px">📅 امروز ('+esc(res.todayDate||'')+')</div>'+
+          renderMyBucket(res.today)+
+          '<div style="font-weight:900;margin:14px 0 6px">🗓️ این ماه ('+esc(res.month||'')+')</div>'+
+          renderMyBucket(res.monthStats);
+      } catch(e){
+        box.innerHTML = '<div style="color:var(--danger);text-align:center">خطا در دریافت گزارش</div>';
+      }
+    }
+    function closeMyReportModal(){
+      lockBodyScroll(false);
+      const el = document.getElementById('myReportModal');
+      if(el) el.classList.remove('show');
     }
 
     function toEnglishDigits(str) {
@@ -3326,6 +3530,7 @@
     function showApp(){
       document.body.className = '';
       document.getElementById('who').textContent = me ? (me.firstName + ' ' + me.lastName) : '—';
+      if(typeof updateBeepBadge === 'function') updateBeepBadge();
       updateDrawerUI();
     }
 
@@ -3805,7 +4010,6 @@
 
         if(!data || !data.ok) throw new Error();
         if(data.logoUrl) applyAppLogo(data.logoUrl);
-        if(typeof data.beep === 'boolean'){ successBeepOn = data.beep; updateBeepBadge(); }
         rows = Array.isArray(data.rows) ? data.rows : [];
         localStorage.setItem(LS_CACHE, JSON.stringify(rows));
 
@@ -3827,6 +4031,8 @@
           if (hdrCp2) hdrCp2.style.display = (me.isAdmin || me.canCreatePermit) ? 'inline-flex' : 'none';
           const drEx2 = document.getElementById('drawerExportExcel');
           if (drEx2) drEx2.style.display = (me.isAdmin || me.canExport) ? 'flex' : 'none';
+          const drRep2 = document.getElementById('drawerMyReport');
+          if (drRep2) drRep2.style.display = (me.isAdmin || me.canMyreport !== false) ? 'flex' : 'none';
         }
 
         const validRows = rows.filter(p => !isHeaderRecord(p));
@@ -3846,7 +4052,11 @@
 
         fillCo(); paint();
         document.getElementById('dot').className = 'dot on';
-        if(!window.__silentRefresh) toast('✓ بروزرسانی موفق: ' + validRows.length + ' پرمیت دریافت شد.');
+        if(!window.__silentRefresh){
+          toast('✓ بروزرسانی موفق: ' + validRows.length + ' پرمیت دریافت شد.');
+          playRefreshSound();
+          logAppCheck('refresh', true);
+        }
         window.__silentRefresh = false;
       } catch(e){
         document.getElementById('dot').className = 'dot err';
@@ -4678,6 +4888,7 @@
       createPermitModal: closeCreatePermitModal,
       unitsManagerModal: closeUnitsManagerModal,
       hseCatalogModal: closeHseCatalogModal,
+      myReportModal: closeMyReportModal,
       drawer: closeDrawer
     };
     let __overlayHistoryArmed = false;
@@ -4821,6 +5032,128 @@
       window.addEventListener('load', function(){ setTimeout(disableWtnPullRefresh, 1000); });
       if(window.WTN){
         try { window.WTN.enablePullToRefresh(false); } catch(e2){}
+      }
+    })();
+
+    window.onload = boot;
+  </script>
+</body>
+</html>pt>
+</body>
+</html>y>
+</html>{}
+      }
+    })();
+
+    window.onload = boot;
+  </script>
+</body>
+</html>pt>
+</body>
+</html>y>
+</html></body>
+</html>pt>
+</body>
+</html>y>
+</html>{}
+      }
+    })();
+
+    window.onload = boot;
+  </script>
+</body>
+</html>pt>
+</body>
+</html>y>
+</html>pState(){
+      if(__ignorePopCount > 0){
+        __ignorePopCount--;
+        return;
+      }
+      const consumed = phoneBack();
+      if(consumed){
+        try { history.pushState({__ptw:1}, ''); } catch(e){}
+      }
+    }
+
+    window.addEventListener('popstate', onPhonePopState);
+
+    document.addEventListener('keydown', function(e){
+      if(e.key === 'Escape' || e.keyCode === 27){
+        if(__topOverlay()){
+          e.preventDefault();
+          phoneBack();
+        }
+      }
+    });
+
+    (function hookNativeBack(){
+      try {
+        if(window.WTN){
+          if(typeof window.WTN.onBackPressed === 'function'){
+            window.WTN.onBackPressed(function(){ return phoneBack(); });
+          }
+          if(typeof window.WTN.setBackHandler === 'function'){
+            window.WTN.setBackHandler(function(){ return phoneBack(); });
+          }
+        }
+      } catch(e){}
+      document.addEventListener('backbutton', function(e){
+        if(phoneBack()){ try { e.preventDefault(); } catch(e2){} }
+      }, false);
+    })();
+
+    (function(){
+      const targets = document.querySelectorAll('.modal, .drawer, .view-page');
+      const obs = new MutationObserver(function(){ __syncOverlayHistory(); });
+      targets.forEach(function(el){ obs.observe(el, { attributes: true, attributeFilter: ['class'] }); });
+    })();
+
+    window.addEventListener('load', function(){
+      try { history.replaceState({__ptw:0}, ''); } catch(e){}
+      armBackHook();
+    });
+
+    // ===== غیرفعال کردن Pull-to-Refresh    // ===== غیرفعال کردن Pull-to-Refresh در اپ webintoapp (WebToNative) =====
+    // اگر اپ از موتور WebToNative ساخته شده باشد، با این API رفرش کشیدن خاموش می‌شود
+    (function(){
+      function disableWtnPullRefresh(){
+        try {
+          if(window.WTN && typeof window.WTN.enablePullToRefresh === 'function'){
+            window.WTN.enablePullToRefresh(false);
+            console.log('✅ Pull-to-Refresh خاموش شد (WTN)');
+          }
+        } catch(eWTN){}
+      }
+      // تلاش بعد از لود کامل (چون WTN ممکن است دیر لود شود)
+      disableWtnPullRefresh();
+      window.addEventListener('load', function(){ setTimeout(disableWtnPullRefresh, 1000); });
+      if(window.WTN){
+        try { window.WTN.enablePullToRefresh(false); } catch(e2){}
+      }
+    })();
+
+    window.onload = boot;
+  </script>
+</body>
+</html>pt>
+</body>
+</html>y>
+</html>{}
+      }
+    })();
+
+    window.onload = boot;
+  </script>
+</body>
+</html>pt>
+</body>
+</html>y>
+</html></body>
+</html>pt>
+</body>
+</html>y>
+</html>{}
       }
     })();
 
