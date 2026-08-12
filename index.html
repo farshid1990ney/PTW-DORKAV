@@ -1280,7 +1280,7 @@
       { key:'export',       flag:'hasExport',       can:'canExport',       icon:'📤', label:'خروجی اکسل تمام پرمیت‌ها' },
       { key:'myreport',     flag:'hasMyreport',     can:'canMyreport',     icon:'📊', label:'گزارش عملکرد شخصی (روز/ماه)', defaultOn:true }
     ];
-    const APP_FILE_VERSION = 'v16.25-html';
+    const APP_FILE_VERSION = 'v16.26-html';
     const LS_CACHE = 'ptw_lead_zinc_cache_v2';
     const LS_OFFLINE_QUEUE = 'ptw_offline_queue_v2';
     const LS_SECONDARY_API = 'ptw_secondary_api_url_v2';
@@ -2268,14 +2268,70 @@
         }
       } catch(e2){}
     }
+    function nativeNotify(title, body){
+      const t = title || 'سامانه پرمیت HSE';
+      const b = body || 'عملیات با موفقیت ثبت شد';
+      const payloads = [
+        { title: t, text: b, body: b, message: b, content: b },
+        t, b
+      ];
+      const tryCall = function(fn, args){
+        try { if(typeof fn === 'function'){ fn.apply(null, args); return true; } } catch(e){}
+        return false;
+      };
+      try {
+        const W = window.WTN || window.WebToNative || window.wtn || null;
+        if(W){
+          if(tryCall(W.showNotification, [payloads[0]])) return true;
+          if(tryCall(W.sendNotification, [payloads[0]])) return true;
+          if(tryCall(W.notify, [payloads[0]])) return true;
+          if(tryCall(W.localNotification, [payloads[0]])) return true;
+          if(tryCall(W.showLocalNotification, [t, b])) return true;
+        }
+      } catch(e1){}
+      try {
+        if(window.Android){
+          if(tryCall(window.Android.showNotification, [t, b])) return true;
+          if(tryCall(window.Android.notify, [t, b])) return true;
+        }
+      } catch(e2){}
+      try {
+        if(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.notification){
+          window.webkit.messageHandlers.notification.postMessage({title:t, body:b});
+          return true;
+        }
+      } catch(e3){}
+      return false;
+    }
+    async function requestNativeNotifyPermission(){
+      let asked = false;
+      try {
+        const W = window.WTN || window.WebToNative || window.wtn || null;
+        if(W){
+          const perms = ['android.permission.POST_NOTIFICATIONS', 'POST_NOTIFICATIONS', 'notifications'];
+          if(typeof W.requestPermissions === 'function'){ asked = true; try { await Promise.resolve(W.requestPermissions(perms)); } catch(e){ try { W.requestPermissions(perms); } catch(e2){} } }
+          if(typeof W.requestPermission === 'function'){ asked = true; try { await Promise.resolve(W.requestPermission('android.permission.POST_NOTIFICATIONS')); } catch(e){ try { W.requestPermission('notifications'); } catch(e2){} } }
+          if(typeof W.askNotificationPermission === 'function'){ asked = true; try { W.askNotificationPermission(); } catch(e){} }
+          if(typeof W.enableNotifications === 'function'){ asked = true; try { W.enableNotifications(true); } catch(e){} }
+        }
+      } catch(eW){}
+      try {
+        if(window.Android && typeof window.Android.requestNotificationPermission === 'function'){
+          asked = true; window.Android.requestNotificationPermission();
+        }
+      } catch(eA){}
+      try {
+        if('Notification' in window && Notification.permission === 'default'){
+          asked = true;
+          await Notification.requestPermission();
+        }
+      } catch(eN){}
+      return asked;
+    }
     function fireSystemNotify(title, body){
       const t = title || 'سامانه پرمیت HSE';
       const b = body || 'عملیات با موفقیت ثبت شد';
-      try {
-        if(window.WTN && typeof window.WTN.showNotification === 'function'){
-          window.WTN.showNotification({ title: t, text: b, body: b });
-        }
-      } catch(eW){}
+      nativeNotify(t, b);
       try {
         if(!('Notification' in window)) return;
         if(Notification.permission !== 'granted') return;
@@ -2305,15 +2361,17 @@
       updateBeepBadge();
       if(successBeepOn){
         let note = 'صدای موفقیت روی همین گوشی روشن شد.';
+        try { await requestNativeNotifyPermission(); } catch(eP){}
+        const nativeOk = nativeNotify('سامانه پرمیت HSE', 'تست اعلان — اگر این را در نوار اعلان دیدید، فعال است');
         try {
-          if('Notification' in window && Notification.permission === 'default'){
-            const perm = await Notification.requestPermission();
-            if(perm === 'granted') note += ' اعلان سیستم (صدای پیامک گوشی) هم فعال شد.';
-            else note += ' اگر اعلان را رد کردید، همان بیپ داخل برنامه پخش می‌شود.';
-          } else if('Notification' in window && Notification.permission === 'granted'){
-            note += ' اعلان سیستم هم فعال است.';
+          if('Notification' in window && Notification.permission === 'granted'){
+            note += ' اعلان وب فعال است.';
+          } else if(nativeOk){
+            note += ' اعلان اپ اندروید ارسال شد.';
+          } else {
+            note += ' اگر اعلان سیستم نیامد: تنظیمات گوشی → این اپ → اعلان‌ها را روشن کنید (اندروید ۱۳ به بالا مجوز جدا می‌خواهد). بیپ و لرزش داخل برنامه کار می‌کند.';
           }
-        } catch(eP){}
+        } catch(e2){}
         toast(note);
         playSuccessBeep('تست صدا — اگر شنیدید تنظیم درست است');
       } else {
@@ -3872,25 +3930,123 @@
     }
 
 
-    async function exportPermitsExcel(){
-      if(!me || !(me.isAdmin || me.canExport)){ toast('⛔ مجوز «خروجی اکسل» ندارید.'); return; }
-      toast('⏳ در حال ساخت فایل اکسل از شیت (ستون A تا O)...');
-      try{
-        const res = await callAPI('exportpermits', { code: me.code }, 25000);
-        if(res && res.ok && res.fileUrl){
-          toast('✅ ' + (res.message || 'فایل آماده شد') + (res.rows!=null?(' — '+res.rows+' ردیف'):''));
-          const a=document.createElement('a');
-          a.href=res.fileUrl;
-          a.download=res.fileName||'permits.xlsx';
-          a.target='_blank';
+    function xmlEscCell(s){
+      return String(s == null ? '' : s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+    function excelXmlFromAoa(aoa, sheetName){
+      let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
+      xml += '<?mso-application progid="Excel.Sheet"?>\n';
+      xml += '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">\n';
+      xml += '<Worksheet ss:Name="'+xmlEscCell(sheetName||'پرمیت')+'"><Table>\n';
+      for(let i=0;i<aoa.length;i++){
+        xml += '<Row>';
+        const row = aoa[i] || [];
+        for(let c=0;c<row.length;c++){
+          xml += '<Cell><Data ss:Type="String">'+xmlEscCell(row[c])+'</Data></Cell>';
+        }
+        xml += '</Row>\n';
+      }
+      xml += '</Table></Worksheet></Workbook>';
+      return xml;
+    }
+    function localPermitsAoa(){
+      const header = ['ردیف','تاریخ شروع','ساعت شروع','محل کار','نوع کار','شرح کار','واحد درخواست‌کننده','تاریخ اتمام','ساعت اتمام','رد فنی','تأیید فنی','علت توقف','شماره پرمیت','مجری','وضعیت'];
+      const list = (rows||[]).filter(function(p){ return p && !isHeaderRecord(p); });
+      const aoa = [header];
+      list.forEach(function(p, i){
+        aoa.push([
+          i+1,
+          cleanDateStr(p.startDate)||'',
+          cleanTimeStr(p.startTime)||'',
+          p.place||'',
+          p.type||'',
+          p.desc||'',
+          p.unit||'',
+          cleanDateStr(p.endDate)||'',
+          cleanTimeStr(p.endTime)||'',
+          p.techReject||'',
+          p.tech||'',
+          p.stopReason||p.closeReason||'',
+          p.permitNo||'',
+          getContractor(p)||'',
+          p.permitStatus||''
+        ]);
+      });
+      return aoa;
+    }
+    function b64ToBlob(b64, mime){
+      const bin = atob(String(b64||'').replace(/\s/g,''));
+      const arr = new Uint8Array(bin.length);
+      for(let i=0;i<bin.length;i++) arr[i] = bin.charCodeAt(i);
+      return new Blob([arr], { type: mime || 'application/vnd.ms-excel' });
+    }
+    function saveExcelFile(blob, fileName){
+      const name = fileName || ('permits_'+Date.now()+'.xls');
+      try {
+        const W = window.WTN || window.WebToNative || window.wtn || null;
+        if(W){
+          const url = URL.createObjectURL(blob);
+          if(typeof W.downloadFile === 'function'){ W.downloadFile({ url: url, fileName: name, filename: name }); return true; }
+          if(typeof W.saveFile === 'function'){ W.saveFile({ url: url, fileName: name, filename: name }); return true; }
+          if(typeof W.share === 'function'){ W.share({ url: url, fileName: name, title: name }); }
+        }
+      } catch(eW){}
+      try {
+        if(window.navigator && window.navigator.msSaveOrOpenBlob){
+          window.navigator.msSaveOrOpenBlob(blob, name);
+          return true;
+        }
+      } catch(eM){}
+      try {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        a.rel = 'noopener';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function(){ try { document.body.removeChild(a); URL.revokeObjectURL(url); } catch(e){} }, 2500);
+        return true;
+      } catch(eA){}
+      try {
+        const reader = new FileReader();
+        reader.onload = function(){
+          const a = document.createElement('a');
+          a.href = reader.result;
+          a.download = name;
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
-        } else {
-          toast('خطا: ' + ((res && res.error) || 'خروجی ساخته نشد'));
+        };
+        reader.readAsDataURL(blob);
+        return true;
+      } catch(eD){}
+      return false;
+    }
+    async function exportPermitsExcel(){
+      if(!me || !(me.isAdmin || me.canExport)){ toast('⛔ مجوز «خروجی اکسل» ندارید.'); return; }
+      toast('⏳ در حال ساخت فایل اکسل (ستون A تا O)...');
+      const localName = 'خروجی_پرمیت_A-O_' + String(Date.now()) + '.xls';
+      try{
+        const res = await callAPI('exportpermits', { code: me.code }, 25000);
+        if(res && res.ok && res.xlsBase64){
+          const blob = b64ToBlob(res.xlsBase64, 'application/vnd.ms-excel');
+          saveExcelFile(blob, res.fileName || localName);
+          toast('✅ فایل اکسل ذخیره شد' + (res.rows!=null?(' — '+res.rows+' ردیف'):''));
+          return;
         }
-      }catch(e){
-        toast('خطا در دریافت خروجی');
+      }catch(e){}
+      try {
+        const aoa = localPermitsAoa();
+        if(aoa.length < 2){ toast('داده‌ای برای خروجی نیست. اول لیست را بروزرسانی کنید.'); return; }
+        const xml = excelXmlFromAoa(aoa, 'پرمیت');
+        const blob = new Blob([xml], { type: 'application/vnd.ms-excel' });
+        saveExcelFile(blob, localName);
+        toast('✅ فایل اکسل از داده همین گوشی ساخته شد — ' + (aoa.length-1) + ' ردیف');
+      } catch(e2){
+        toast('خطا در ساخت فایل اکسل روی گوشی');
       }
     }
 
