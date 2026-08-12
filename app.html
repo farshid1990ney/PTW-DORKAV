@@ -1,0 +1,3417 @@
+/**
+ * ============================================================
+ *  سامانه پایش پرمیت کارخانه فرآوری سرب و روی - Google Apps Script
+ *  نسخه چابک v16.1 (رفع نشت رمز ورود کاربران + سیستم مجوزهای تکی Per-User)
+ * ============================================================
+ *  قابلیت v16.1 (امنیت بحرانی — رفع نشت کد کاربران از تاریخچه بازدیدها):
+ *  - کد ۸ رقمی (= رمز ورود کاربر) دیگر در شیت «بازدیدها» ذخیره نمی‌شود؛ فقط نام بازدیدکننده ثبت می‌شود
+ *  - اکشن visits بدون احراز هویت پاسخ نمی‌دهد: فقط کاربر لاگین‌شده می‌تواند تاریخچه را ببیند
+ *  - inspectorCode هرگز در پاسخ API بازگردانده نمی‌شود (نمایش اپ هم فقط نام است)
+ *  - آیتم منوی «🧹 پاک‌سازی کدهای بازدیدکننده» کدهای قدیمی ستون I را یک‌باره پاک می‌کند
+ * ============================================================
+ *  قابلیت v16.0 (مجوزهای ریزدانه به تفکیک کاربر - اعمال‌شده در بک‌اند):
+ *  - به‌صورت پیش‌فرض هیچ کاربر عادی هیچ مجوز تغییری ندارد؛ مشاهده پرمیت‌ها و گشت‌ها برای
+ *    همه کاربران لاگین‌شده آزاد است، اما هر ۱۰ عملیات تغییردهنده زیر نیازمند مجوز جداگانه
+ *    (ستون مخصوص خودش در شیت «کاربران» با مقدار «مجاز») هستند و مدیر ارشد از پنل مدیریت
+ *    برای هر کاربر به‌صورت تکی تیک می‌زند:
+ *      1) ثبت پرمیت جدید        (createpermit)      → ستون ۱۱ «مجوز ثبت پرمیت»
+ *      2) تأیید و فعال‌سازی     (approvepermit)     → ستون ۱۲ «مجوز تأیید پرمیت»
+ *      3) رد پرمیت              (rejectpermit)      → ستون ۱۳ «مجوز رد پرمیت»
+ *      4) بازرسی مجدد           (reinspectpermit)   → ستون ۱۴ «مجوز بازرسی مجدد»
+ *      5) بستن دستی پرمیت       (closepermit)       → ستون ۱۵ «مجوز بستن دستی»
+ *      6) تمدید/بازفعال‌سازی    (reactivatepermit)  → ستون ۱۰ «مجوز بازفعالسازی» (حداکثر ۴ بار)
+ *      7) ثبت گشت HSE           (savepatrolvisit)   → ستون ۱۶ «مجوز ثبت گشت»
+ *      8) حذف دائم پرمیت        (deletepermit)      → ستون ۱۷ «مجوز حذف پرمیت»
+ *      9) ویرایش واحدها/پیمانکاران (saveunitssettings) → ستون ۱۸ «مجوز ویرایش واحدها»
+ *     10) تحلیل هوش مصنوعی      (analyzepermit)     → ستون ۱۹ «مجوز تحلیل AI»
+ *  - مدیر ارشد (کد 96792582) همیشه و بدون نیاز به هیچ تیکی به همه عملیات دسترسی دارد.
+ *  - کنترل مجوزها فقط در رابط کاربری نیست؛ در خود توابع بک‌اند (دفاع در عمق) اعمال می‌شود.
+ *  - اکشن جدید one-stop برای پنل: setgrant (با پارامترهای targetCode, perm, grant, code=مدیر)
+ *    و دو اکشن قدیمی setreactivation / setcreatepermit برای سازگاری حفظ شده‌اند.
+ *  - هر تمدید تا پایان شیفت ۱۲ ساعته جاری محاسبه و در همان ستون‌های «تاریخ/ساعت اتمام» ثبت می‌شود که
+ *    autoCloseExpiredPermits برای بستن خودکار می‌خواند؛ در نتیجه زمان بسته‌شدن خودکار پرمیت‌های
+ *    بازفعال‌شده همیشه دقیقاً مطابق همان زمان‌بندی شیفت تعریف‌شده است.
+ *  - ثبت مبدا تمدید در ستون Z (مبدا تمدید) جهت حسابرسی تمدیدهای متوالی
+ */
+
+var PERMIT_SHEET = 'پرمیت';
+var USER_SHEET = 'کاربران';
+var VISIT_SHEET = 'بازدیدها';
+var KNOWLEDGE_SHEET = 'دانش_HSE';
+var DRIVE_FOLDER_NAME = 'عکس‌های_گشت_HSE';
+
+var DEFAULT_CODES = [
+  '13619873', '15459515', '25502866', '31163860',
+  '35732010', '47488794', '56738018', '58989085',
+  '64614684', '66724517', '75013123', '96792582'
+];
+
+var ADMIN_CODES = ['96792582'];
+
+// حداکثر تعداد تمدید مجاز برای کاربر عادی دارای مجوز: ۴ بار (هر بار تا پایان شیفت؛ مجموعاً ۵ روز از روز صدور)
+// مدیر ارشد بدون محدودیت تمدید می‌کند.
+var MAX_EXTEND_DAYS = 4;
+
+// ===== گوگل‌شیت دوم (آینه کامل خودکار) =====
+// اگر می‌خواهید بدون هیچ تنظیمی (بدون منو) همه‌چیز همزمان در شیت دوم ذخیره شود،
+// فقط ID گوگل‌شیت دوم را در رشته زیر قرار دهید (مثل: '1AbCdEfGhIjKlMnOpQrStUvWxYz1234567890'):
+// ===== شیت دوم غیرفعال است (طبق درخواست، همه‌چیز در پنل مدیریت و لاگ داخلی ذخیره می‌شود) =====
+var HARDCODED_SECONDARY_SHEET_ID = '';
+
+// ============================================================
+//  تعریف مجوزهای تکی کاربران (ستون‌های شیت «کاربران»)
+//  ترتیب آرایه = ترتیب ستون‌ها؛ مقدار اعطا: «مجاز» — پیش‌فرض خالی یعنی بدون مجوز
+// ============================================================
+var USER_PERMS = [
+  { key: 'reactivate',   col: 10, header: 'مجوز بازفعالسازی',   flag: 'hasReactivate',   label: 'تمدید و بازفعال‌سازی پرمیت' },
+  { key: 'createPermit', col: 11, header: 'مجوز ثبت پرمیت',     flag: 'hasCreatePermit', label: 'ثبت پرمیت جدید' },
+  { key: 'approve',      col: 12, header: 'مجوز تأیید پرمیت',   flag: 'hasApprove',      label: 'تأیید و فعال‌سازی پرمیت' },
+  { key: 'reject',       col: 13, header: 'مجوز رد پرمیت',      flag: 'hasReject',       label: 'رد پرمیت' },
+  { key: 'reinspect',    col: 14, header: 'مجوز بازرسی مجدد',   flag: 'hasReinspect',    label: 'بازرسی مجدد و رفع ایراد' },
+  { key: 'close',        col: 15, header: 'مجوز بستن دستی',     flag: 'hasClose',        label: 'بستن دستی پرمیت (اتمام کار)' },
+  { key: 'patrol',       col: 16, header: 'مجوز ثبت گشت',       flag: 'hasPatrol',       label: 'ثبت گشت و بازدید HSE' },
+  { key: 'delete',       col: 17, header: 'مجوز حذف پرمیت',     flag: 'hasDelete',       label: 'حذف دائم پرمیت' },
+  { key: 'units',        col: 18, header: 'مجوز ویرایش واحدها', flag: 'hasUnits',        label: 'ویرایش واحدها و پیمانکاران' },
+  { key: 'analyze',      col: 19, header: 'مجوز تحلیل AI',      flag: 'hasAnalyze',      label: 'تحلیل هوش مصنوعی (AI)' }
+];
+
+// -------------------- Permission Helpers (v16) --------------------
+
+function _permDef(key) {
+  for (var i = 0; i < USER_PERMS.length; i++) {
+    if (USER_PERMS[i].key === key) return USER_PERMS[i];
+  }
+  return null;
+}
+
+/** آیا کاربر مجوز مشخص‌شده را دارد؟ مدیر ارشد همیشه true است */
+function _userHasPerm(u, permKey) {
+  if (!u) return false;
+  if (_isAdmin(u.code)) return true;
+  var def = _permDef(permKey);
+  return def ? (u[def.flag] === true) : false;
+}
+
+function _permError(permKey) {
+  var def = _permDef(permKey);
+  return '⛔ شما مجوز «' + (def ? def.label : permKey) + '» را ندارید. این مجوز باید توسط مدیر ارشد از پنل مدیریت کاربران برای شما فعال شود.';
+}
+
+function _denyPerm(permKey, cb, embedMsgId) {
+  return _json({ ok: false, error: _permError(permKey), needPerm: permKey }, cb, embedMsgId);
+}
+
+/** آبجکت me برای پاسخ‌های login/permits با همه پرچم‌های can* */
+function _buildMe(u, code) {
+  if (!u) return null;
+  code = String(code || u.code || '').trim();
+  var isAdm = _isAdmin(code);
+  var me = {
+    code: u.code,
+    firstName: u.firstName,
+    lastName: u.lastName,
+    status: u.status,
+    isAdmin: isAdm
+  };
+  for (var i = 0; i < USER_PERMS.length; i++) {
+    var def = USER_PERMS[i];
+    var canKey = 'can' + def.key.charAt(0).toUpperCase() + def.key.slice(1);
+    me[canKey] = isAdm || u[def.flag] === true;
+  }
+  return me;
+}
+
+// -------------------- Menu --------------------
+
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('🧰 پرمیت HSE (فلوتاسیون سرب و روی)')
+    .addItem('🧱 ساخت شیت‌ها و جداول اولیه', 'menuSetupSheets')
+    .addItem('🛡️ ساخت شیت بازدیدهای گشت', 'setupVisitsSheet')
+    .addItem('📚 ساخت شیت دانش ۴۵‌گانه HSE فلوتاسیون', 'setupKnowledgeSheet')
+    .addItem('⏱️ بستن خودکار پرمیت‌های منقضی ۱۲ ساعته', 'autoCloseExpiredPermits')
+    .addItem('🛠️ اصلاح و قفل ستون‌های تاریخ به متن (ضد آپریل)', 'menuFixDateColumns')
+    .addItem('📅 باز کردن تقویم و انتخاب‌گر شمسی (Sidebar)', 'openShamsiSidebar')
+    .addItem('⚡ نصب ناظر خودکار بستن ۱۲ ساعته (Trigger)', 'installAutoCloseTrigger')
+    .addItem('♻️ ریست کاربران (۱۲ کد)', 'menuResetUsers')
+    .addItem('🧹 پاک‌سازی کدهای بازدیدکننده از بازدیدها (امنیتی)', 'scrubVisitInspectorCodes')
+    .addSeparator()
+    .addItem('🧠 افزودن ستون‌های تحلیل AI', 'addAIHeaders')
+    .addItem('🧪 تست اتصال Groq / Gemini AI', 'testAIConnection')
+    .addItem('🔍 تحلیل ردیف فعلی با AI', 'analyzeActiveRowWithAI')
+    .addItem("🟢 تحلیل پرمیت‌های فعال با AI", "analyzeActivePermitsWithAI")
+    .addSeparator()
+    .addItem('📜 تنظیم شیت لاگ عملکرد (جداگانه)', 'menuSetAuditSheet')
+    .addItem('🖥️ تنظیم آدرس پنل مدیریت و لاگ', 'menuSetAdminPanelUrl')
+    .addItem('🔍 بررسی صحت زنجیره لاگ (ضد دستکاری)', 'verifyAuditChain')
+    .addItem('🔎 بررسی پرمیت‌های حذف‌شده', 'detectDeletedPermits')
+    .addItem('💾 پشتیبان‌گیری فوری از پرمیت‌ها', 'backupPermitSheet')
+    .addItem('⚡ نصب ناظر تغییرات دستی (onEdit)', 'setupAuditTriggers')
+    .addItem('⚡ نصب پشتیبان روزانه', 'installDailyBackupTrigger')
+    .addSeparator()
+    .addItem('ℹ️ راهنمای سیستم', 'menuHelp')
+    .addToUi();
+}
+
+function _json(obj, callback, embedMsgId) {
+  var str = JSON.stringify(obj);
+  if (embedMsgId && typeof embedMsgId === "string" && embedMsgId.trim() !== "") {
+    var htmlContent = "<!DOCTYPE html><html><head><meta charset='UTF-8'></head><body><script>" +
+      "try { window.parent.postMessage({ msgId: " + JSON.stringify(embedMsgId) + ", data: " + str + " }, '*'); } catch(e){}" +
+      "</script></body></html>";
+    return HtmlService.createHtmlOutput(htmlContent);
+  }
+  if (callback && typeof callback === "string" && callback.trim() !== "") {
+    return ContentService
+      .createTextOutput(callback.trim() + "(" + str + ")")
+      .setMimeType(ContentService.MimeType.JAVASCRIPT);
+  }
+  return ContentService
+    .createTextOutput(str)
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// -------------------- Jalali Date Arithmetic Helpers --------------------
+
+function _jalaliToGregorian(jy, jm, jd) {
+  var gy = (jy <= 979) ? 621 : 1600;
+  jy -= (jy <= 979) ? 0 : 979;
+  var days = (365 * jy) + Math.floor(jy / 33) * 8 + Math.floor(((jy % 33) + 3) / 4) + 78 + jd + ((jm < 7) ? (jm - 1) * 31 : ((jm - 7) * 30) + 186);
+  gy += 400 * Math.floor(days / 146097);
+  days %= 146097;
+  if (days > 36524) {
+    gy += 100 * Math.floor(--days / 36524);
+    days %= 36524;
+    if (days >= 365) days++;
+  }
+  gy += 4 * Math.floor(days / 1461);
+  days %= 1461;
+  if (days > 365) {
+    gy += Math.floor((days - 1) / 365);
+    days = (days - 1) % 365;
+  }
+  var gd = days + 1;
+  var sal_a = [0, 31, ((gy % 4 === 0 && gy % 100 !== 0) || (gy % 400 === 0)) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  var gm;
+  for (gm = 0; gm < 13 && gd > sal_a[gm]; gm++) gd -= sal_a[gm];
+  return new Date(gy, gm - 1, gd);
+}
+
+function _gregorianToJalali(gDate) {
+  var gy = gDate.getFullYear();
+  var gm = gDate.getMonth() + 1;
+  var gd = gDate.getDate();
+  var g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+  var jy = (gy <= 1600) ? 0 : 979;
+  gy -= (gy <= 1600) ? 621 : 1600;
+  var gy2 = (gm > 2) ? (gy + 1) : gy;
+  var days = (365 * gy) + Math.floor((gy2 + 3) / 4) - Math.floor((gy2 + 99) / 100) + Math.floor((gy2 + 399) / 400) - 80 + gd + g_d_m[gm - 1];
+  jy += 33 * Math.floor(days / 12053);
+  days %= 12053;
+  jy += 4 * Math.floor(days / 1461);
+  days %= 1461;
+  if (days > 365) {
+    jy += Math.floor((days - 1) / 365);
+    days = (days - 1) % 365;
+  }
+  var jm = (days < 186) ? 1 + Math.floor(days / 31) : 7 + Math.floor((days - 186) / 30);
+  var jd = 1 + ((days < 186) ? (days % 31) : ((days - 186) % 30));
+  var mStr = jm < 10 ? '0' + jm : '' + jm;
+  var dStr = jd < 10 ? '0' + jd : '' + jd;
+  return jy + '/' + mStr + '/' + dStr;
+}
+
+function _addDaysToJalali(jalaliStr, numDays) {
+  if (!jalaliStr) return '';
+  var parts = jalaliStr.split('/');
+  if (parts.length < 3) return jalaliStr;
+  var jy = parseInt(parts[0], 10);
+  var jm = parseInt(parts[1], 10);
+  var jd = parseInt(parts[2], 10);
+  if (isNaN(jy) || isNaN(jm) || isNaN(jd)) return jalaliStr;
+  var gDate = _jalaliToGregorian(jy, jm, jd);
+  gDate.setDate(gDate.getDate() + numDays);
+  return _gregorianToJalali(gDate);
+}
+
+// -------------------- Auto Close 12-Hour Trigger --------------------
+
+function installAutoCloseTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'autoCloseExpiredPermits') {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+  ScriptApp.newTrigger('autoCloseExpiredPermits')
+    .timeBased()
+    .everyMinutes(15)
+    .create();
+  var ui = null;
+  try { ui = SpreadsheetApp.getUi(); } catch(e){}
+  if (ui) {
+    ui.alert("⚡ فعال‌سازی موفق", "ناظر خودکار بستن پرمیت‌های ۱۲ ساعته فعال شد.", ui.ButtonSet.OK);
+  }
+}
+
+function autoCloseExpiredPermits() {
+  var sh = _permitSheet();
+  var values = sh.getDataRange().getDisplayValues();
+  if (!values || values.length <= 1) return 0;
+  var colStartD = 1, colStartT = 2, colEndD = 7, colEndT = 8, colStatus = 14, colPermitNo = 12;
+  for (var hIdx = 0; hIdx < Math.min(values.length, 5); hIdx++) {
+    var rT = values[hIdx].map(function(c) { return String(c || '').trim().toLowerCase(); });
+    if (_isHeaderOrPlaceholderRow(rT)) {
+      rT.forEach(function(h, idx) {
+        if (/تاریخ\s*شروع/i.test(h)) colStartD = idx;
+        else if (/ساعت\s*شروع/i.test(h)) colStartT = idx;
+        else if (/تاریخ\s*اتمام/i.test(h)) colEndD = idx;
+        else if (/ساعت\s*اتمام/i.test(h)) colEndT = idx;
+        else if (/وضعیت/i.test(h)) colStatus = idx;
+        else if (/شماره\s*پرمیت|^پرمیت$/i.test(h)) colPermitNo = idx;
+      });
+      break;
+    }
+  }
+  var now = new Date();
+  var timeZone = Session.getScriptTimeZone() || 'Asia/Tehran';
+  var todayFaStr = _gregorianToJalali(now);
+  var nowFaTime = Utilities.formatDate(now, timeZone, 'HH:mm');
+  var nowCompStr = todayFaStr + " " + nowFaTime;
+  var updatedCount = 0;
+  var closedList = [];
+  for (var i = 1; i < values.length; i++) {
+    var r = values[i];
+    if (_isHeaderOrPlaceholderRow(r)) continue;
+    var status = String(r[colStatus] || '').trim();
+    if (status === 'بسته' || status === 'بسته شده' || status === 'رد شده') continue;
+    var sD = _cleanDateStr(r[colStartD]);
+    var sT = _cleanTimeStr(r[colStartT]);
+    var eD = _cleanDateStr(r[colEndD]);
+    var eT = _cleanTimeStr(r[colEndT]);
+    if (sD) {
+      var expireDateStr = sD;
+      var expireTimeStr = "19:00";
+      if (eD) expireDateStr = eD;
+      if (eT) expireTimeStr = eT;
+      if (!eT) {
+        var hourNum = 7;
+        if (sT) {
+          var hParts = sT.split(':');
+          hourNum = parseInt(hParts[0], 10);
+          if (isNaN(hourNum)) hourNum = 7;
+        }
+        if (hourNum >= 7 && hourNum < 19) {
+          expireDateStr = sD;
+          expireTimeStr = "19:00";
+        } else if (hourNum >= 19) {
+          expireDateStr = _addDaysToJalali(sD, 1);
+          expireTimeStr = "07:00";
+        } else {
+          expireDateStr = sD;
+          expireTimeStr = "07:00";
+        }
+      }
+      var expireCompStr = expireDateStr + " " + expireTimeStr;
+      if (nowCompStr >= expireCompStr) {
+        sh.getRange(i + 1, colStatus + 1).setValue('بسته');
+        updatedCount++;
+        closedList.push(String(r[colPermitNo] || '').trim() || ('ردیف ' + (i + 1)));
+      }
+    }
+  }
+  if (updatedCount > 0) {
+    _tryAudit('CLOSE_AUTO', 'بستن خودکار ' + updatedCount + ' پرمیت منقضی: ' + closedList.slice(0, 20).join('، ') + (closedList.length > 20 ? ' و ' + (closedList.length - 20) + ' مورد دیگر' : ''), '', 'سیستم خودکار', 'فعال', 'بسته', '');
+    syncPermitsToSecondarySheet();
+  }
+  return updatedCount;
+}
+
+// -------------------- Knowledge Sheet (45 HSE Rules) --------------------
+
+function setupKnowledgeSheet() {
+  var ss = _ss();
+  var shK = ss.getSheetByName(KNOWLEDGE_SHEET);
+  if (!shK) {
+    shK = ss.insertSheet(KNOWLEDGE_SHEET);
+  } else {
+    shK.clear();
+  }
+  shK.appendRow(['ردیف', 'بخش / تجهیز / کلیدواژه', 'الزامات تخصصی ایمنی، خطرات پنهان و استانداردهای HSE کارخانه فلوتاسیون سرب و روی (۴۵ دستورالعمل)']);
+  shK.getRange(1, 1, 1, 3).setFontWeight('bold').setBackground('#0f766e').setFontColor('#ffffff');
+  var rules45 = [
+    [1, 'سنگ‌شکن / آسیا / بالمیل / خردکن (Crushers & Ball Mills)', 'الزامات آیین‌نامه خردکن و آسیاب: قفل LOTO کامل برقی و مکانیکی قبل از ورود به بوش/بدنه آسیاب، کلید طنابی اضطراری Pull Cord، ماسک P3/FFP3 ضد غبار سمی سرب/روی (پایش BLL)، ارتینگ، عینک راک‌باکس.'],
+    [2, 'سلول‌های فلوتاسیون / تیکندر / تانک آماده‌سازی (Flotation Cells & Thickeners)', 'الزامات آیین‌نامه مخلوط‌کن و فضای بسته: پرمیت ورود به فضای بسته (Confined Space)، پایش اکسیژن/H2S، نگهبان بیرونی، قفل ولوهای اسید/گزانتات، ماسک فیلتردار ضد گاز.'],
+    [3, 'پمپ‌های سنگین اسلاری / فراز پمپ / سامپ (Slurry & Faraz Pumps)', 'الزامات باربرداری و LOTO: پرمیت لیفتینگ با جرثقیل، تست اسلینگ/شکل، حضور ریگر باگواهی، طناب مهار Tag Line، قفل LOTO برقی MCC، سکوی ایمن و هارنس دو قلاب.'],
+    [4, 'جوشکاری / برشکاری / کار گرم (Hot Work & Welding)', 'الزامات آیین‌نامه کار گرم: پرمیت کار گرم، ۲ کپسول آتش‌نشانی، پایش حریق Fire Watch حین کار و ۳۰ دقیقه پس از اتمام، پتو نسوز محافظ نوارهای لاستیکی و سلول‌ها.'],
+    [5, 'کار در ارتفاع / داربست / لایف‌لاین (Work at Height)', 'الزامات کار در ارتفاع بالای ۱.۸ متر: هارنس دو قلاب با شوک‌گیر، اتصال به لایف‌لاین، داربست با تخته سالم و handrail/toe-board، مسدودسازی Drop Zone با نوار خطر.'],
+    [6, 'مواد شیمیایی فلوتاسیون / اسید سولفوریک / کلکتور (Chemical Reagents)', 'الزامات ایمنی شیمیایی: PPE اختصاصی (عینک ضد اسید، دستکش شید، چکمه لاستیکی)، سلامت دوش/چشم‌شور اضطراری، برچسب‌گذاری MSDS ظرف شیمیایی، تهویه سالن.'],
+    [7, 'تاسیسات الکتریکی / تابلوهای MCC / ترانسفرمر (Electrical Systems)', 'الزامات تاسیسات الکتریکی: ۵ مرحله LOTO (قطع، قفل، برچسب، تست ولتاژ zero، تخلیه بار)، فرش عایق برق، ابزار عایق ۱۰۰۰ ولت، تست پیوستگی ارتینگ.'],
+    [8, 'نوار نقاله‌ها / تجهیزات انتقال نیرو (Conveyors & Power Transmission)', 'الزامات انتقال نیرو: کاور کامل گیربکس/تسمه/کوپلینگ، تست کلید طنابی Pull Cord در دو طرف نوار، ممنوعیت تمیزکاری و اپراتوری نوار حین حرکت.'],
+    [9, 'فیلترپرس / انبار کنسانتره سرب و روی (Filter Press & Stockpile)', 'الزامات بهداشت حرفه‌ای و مکانیکی: پین/قفل هیدرولیک جک فیلترپرس، ماسک P3 سرب، مرطوب‌سازی انبار جهت کنترل غبار، عدم استعمال دخانیات و خوراکی.'],
+    [10, 'ماشین‌آلات عمرانی / لیفتراک / حمل‌ونقل (Forklifts & Vehicles)', 'الزامات آیین‌نامه لیفتراک: گواهی‌نامه ویژه، بوق دنده عقب، چراغ گردان، گواهی بازرسی شاخک/زنجیر، ممنوعیت حمل نفر روی شاخک، سرعت مجاز ۱۵km/h.'],
+    [11, 'پیمانکاران و جلسات آموزشی TBM (Contractors & TBM)', 'الزامات ایمنی پیمانکاری: برگزاری TBM قبل از شروع هر شیفت، تایید صلاحیت فنی سرپرست پیمانکار، بازرسی ابزار دستی/برقی قبل از ورود.'],
+    [12, 'دستگاه تراش / سنگ‌زنی / ابزار دستی کارگاه (Machine & Hand Tools)', 'الزامات ماشین‌های افزار: حفاظ طلقی سنگ رومیزی، فاصله ۳mm تکیه‌گاه، عینک شیلددار حین سنگ‌زنی، بازرسی سلامت ابزار دستی (عدم قارچی بودن قلم).'],
+    [13, 'دیگ بخار / تصفیه‌خانه آب و فاضلاب (Boilers & Water Treatment)', 'الزامات ایمنی دیگ بخار: بازرسی سالانه سوپاپ اطمینان، تست آب‌نما، تهویه سالن تصفیه‌خانه، ماسک فیلتردار کلر و پایش گازهای سمی.'],
+    [14, 'چگالی‌سنج / سنسور پرتوهای یونیزان XRF (Radiation Protection)', 'الزامات حفاظت پرتوها: علائم هشدار پرتو روی دنسیتومترهای XRF خط فلوتاسیون، شیلد سربی تاییدشده، دوزیمتری دوره‌ای، عدم دستکاری سنسور.'],
+    [15, 'علائم ایمنی / نوار خطر / مسدودسازی (Safety Signage)', 'الزامات علائم ایمنی: نصب تابلوهای هشدار برق فشار قوی، غبار سمی سرب، سقوط از ارتفاع، مسدودسازی کامل محوطه حفاری/تعمیرات با نوار خطر.'],
+    [16, 'ارزیابی ریسک کارهای غیرروتین (Risk Assessment)', 'الزامات ارزیابی ریسک: آنالیز خطرات JSA قبل از کارهای غیرروتین، تعیین اقدامات کنترلی طبق ماتریس ریسک، ثبت شناسه گشت.'],
+    [17, 'کنترل مواجهه با غبار سرب و بهداشت شغلی (Lead Health Control)', 'الزامات بهداشت حرفه‌ای: پایش دوره‌ای BLL (سطح سرب خون)، استحمام اجباری پایان شیفت، تعویض روزانه لباس آلوده، مجزا بودن غذاخوری.'],
+    [18, 'کمپرسورها و سیستم هوای فشرده (Compressed Air)', 'الزامات مخازن فشار: بازرسی سوپاپ اطمینان مخزن هوا، پین ایمنی اتصالات شیلنگ‌های باد (Whip Check)، ممنوعیت گرفتگی با باد.'],
+    [19, 'جرثقیل سقفی سالن آسیاب و فلوتاسیون (Overhead Cranes)', 'الزامات جرثقیل سقفی: تست لیمیت سوئیچ قلاب، سلامت میکروسوئیچ حرکتی، بوق هشدار حرکت، بازرسی هوک و ضامن ایمنی.'],
+    [20, 'شارژ گلوله‌های فولادی آسیاب (Grinding Media Charging)', 'الزامات شارژ بالمیل: پرمیت اختصاصی، استفاده از قیف و مگنت استاندارد، عینک شیلددار، چک LOTO همزن.'],
+    [21, 'سد باطله و پمپاژ برگشتی (Tailings Dam)', 'الزامات سد باطله: چک جاده‌های دسترسی، سلامت لوله‌های پمپاژ اسلاری، جلیقه نجات حین کار روی قایق پمپاژ.'],
+    [22, 'دوش و چشم‌شور اضطراری (Emergency Showers)', 'الزامات چشم‌شور: تست هفتگی فشار آب دوش و چشم‌شور سالن فلوتاسیون، عدم مسدود بودن مسیر دسترسی.'],
+    [23, 'سامپ‌های پمپاژ و لجن‌کشی (Dewatering Sumps)', 'الزامات سامپ: گارد ایمنی اطراف سامپ، طناب نجات، ماسک ضد گاز حین تمیزکاری لجن سمی سرب.'],
+    [24, 'آپارات و جوش نوار نقاله (Belt Splicing)', 'الزامات جوش نوار: پرمیت کار گرم، LOTO موتور نوار، تهویه مناسب حین استفاده از چسب‌های فرار.'],
+    [25, 'آهک‌دهی و تنظیم‌کننده‌های pH (Lime Dosing)', 'الزامات آهک: عینک ضد گرد آهک، ماسک تنفسی FFP2، دستکش بلند لاستیکی، غبارگیری سالن آهک.'],
+    [26, 'هیدروسیکلون‌ها و سرندها (Hydrocyclones & Sieves)', 'الزامات سرند: قطع برق LOTO حین تعویض توری سرند، عینک ایمنی، کفش ضد لغزش روی گرتینگ خیس.'],
+    [27, 'کیت مهار نشتی مواد شیمیایی (Chemical Spill Kit)', 'الزامات نشتی: وجود پودر خنثی‌کننده و ماسک شیمیایی در محل انبار گزانتات و سولفات روی.'],
+    [28, 'گرتینگ‌ها و راهروهای فلزی کارگاه (Metal Gratings)', 'الزامات راهروها: جوش محکم گرتینگ‌ها، عدم وجود لغزندگی ناشی از اسلاری، نرده حفاظتی سالم.'],
+    [29, 'روشنایی سالن‌های تولید در شیفت شب (Night Lighting)', 'الزامات روشنایی: حداقل ۱۵۰ لوکس روشنایی در مسیرهای تردد و ۳۰۰ لوکس در نقاط بازرسی پمپ‌ها.'],
+    [30, 'جعبه‌های کمک‌های اولیه و برانکارد (First Aid Kits)', 'الزامات امداد: موجود بودن برانکارد، کیت شستشوی چشم و پانسمان در اتاق کنترل فلوتاسیون.'],
+    [31, 'کلیدهای قطع اضطراری Emergency Stop (E-Stops)', 'الزامات E-Stop: سلامت کلید قارچی قرمز رنگ روی تمامی تابلوهای محلی پمپ‌ها و سنگ‌شکن.'],
+    [32, 'کنترل صدا و گوشی‌های حفاظت شنوایی (Hearing Protection)', 'الزامات صدا: استفاده الزامی از ایرماف/ایربلاگ در سالن آسیاب و سنگ‌شکن (صدا بالای ۸۵ دسی‌بل).'],
+    [33, 'کابل‌کشی و کانال‌های کابل (Cable Trenches)', 'الزامات کابل: کاور فلزی/بتنی کانال‌های کابل، عدم وجود کابل لخت در مسیر تردد اسلاری.'],
+    [34, 'جابه‌جایی دستی بار و آرگونومی (Manual Handling)', 'الزامات حمل بار: حداکثر وزن مجاز ۲۰kg برای نفر، استفاده از تکنیک خم کردن زانو.'],
+    [35, 'دستورالعمل نظافت و شستشوی کارگاه (Washdown Protocol)', 'الزامات شستشو: استفاده از نازل فشار آب خروجی، عدم پاشش مستقیم آب به موتورها و تابلوهای برقی.'],
+    [36, 'تخلیه پسماندهای سمی و لجن سرب (Toxic Waste Disposal)', 'الزامات پسماند: جمع‌آوری لجن سرب در بشکه‌های دربسته برچسب‌دار و انتقال به انبار پسماند خطرناک.'],
+    [37, 'مسیرهای فرار و درهای اضطراری (Emergency Exits)', 'الزامات فرار: باز بودن کامل درهای خروج اضطراری سالن فلوتاسیون، تابلوهای شنگرفی خروج.'],
+    [38, 'سیستم‌های اعلام و اطفاء حریق (Fire Alarms)', 'الزامات اعلام حریق: تست دوره‌ای دتکتورهای دودی اتاق کنترل و سالن MCC برقی.'],
+    [39, 'بازرسی ابزارهای برقی پرتابل (Portable Power Tools)', 'الزامات ابزار برقی: سلامت کابل ورودی، کلید قطع جان، عدم استفاده از ابزار بدون پریز ارت‌دار.'],
+    [40, 'تست غلظت گازهای سمی در آزمایشگاه (Lab Gas Venting)', 'الزامات آزمایشگاه: کارکرد مداوم هود شیمیایی حین آنالیز عیارسنجی سرب و روی با اسید.'],
+    [41, 'ایمنی جک‌های هیدرولیک و پنوماتیک (Hydraulics Safety)', 'الزامات هیدرولیک: چک عدم نشتی روغن هیدرولیک، پین ایمنی جک‌های سنگین فیلترپرس.'],
+    [42, 'حفاظت در برابر پرتاب اجسام (Impact Protection)', 'الزامات پرتاب سنگ: نصب گارد لاستیکی سنگین در ورودی سنگ‌شکن فکی و مخروطی.'],
+    [43, 'مدیریت سوخت و مخازن گازوئیل (Fuel Storage)', 'الزامات سوخت: حوضچه دیواره‌دار (Bund Wall) دور مخزن گازوئیل، تابلو دخانیات ممنوع.'],
+    [44, 'بازرسی فنی کابل‌های کششی طنابی (Pull Cord Wires)', 'الزامات Pull Cord: عدم کشیدگی یا شل بودن طناب فولادی کلید اضطراری نوارهای انتقال.'],
+    [45, 'نظارت بر تهویه سالن‌های خشک‌کن کنسانتره (Dryer Ventilation)', 'الزامات خشک‌کن: کارکرد فن‌های مکنده غبار خشک‌کن سرب و روی و پایش بگ‌فیلترها.']
+  ];
+  var rowsToSet = [];
+  for (var k = 0; k < rules45.length; k++) {
+    rowsToSet.push([rules45[k][0], rules45[k][1], rules45[k][2]]);
+  }
+  shK.getRange(2, 1, rowsToSet.length, 3).setValues(rowsToSet);
+  shK.setColumnWidth(1, 60);
+  shK.setColumnWidth(2, 280);
+  shK.setColumnWidth(3, 650);
+  var ui = null;
+  try { ui = SpreadsheetApp.getUi(); } catch(e){}
+  if (ui) {
+    ui.alert("✅ انجام شد", "شیت «دانش_HSE» با ۴۵ قانون کامل و جامع فلوتاسیون سرب و روی بر اساس آیین‌نامه‌های رسمی آماده گردید.", ui.ButtonSet.OK);
+  }
+  return shK;
+}
+
+/**
+ * خواندن خلاصه قوانین جهت جلوگیری از سنگین شدن پرامپت هوش مصنوعی و پاسخ‌دهی زیر ۱ ثانیه
+ */
+function _getCustomHSEKnowledge() {
+  try {
+    var ss = _ss();
+    var shK = ss.getSheetByName(KNOWLEDGE_SHEET);
+    if (!shK) return "";
+    var vals = shK.getDataRange().getDisplayValues();
+    if (vals.length <= 1) return "";
+    var rules = [];
+    for (var i = 1; i < Math.min(vals.length, 35); i++) {
+      if (vals[i][1] && vals[i][2]) {
+        var summaryText = String(vals[i][2]);
+        if (summaryText.length > 100) summaryText = summaryText.substring(0, 100) + "...";
+        rules.push("• " + vals[i][1] + ": " + summaryText);
+      }
+    }
+    return rules.join("\n");
+  } catch(e) {
+    return "";
+  }
+}
+
+// -------------------- Secondary Sheet & Setup --------------------
+
+function menuSetSecondarySheet() {
+  var ui = SpreadsheetApp.getUi();
+  var response = ui.prompt(
+    "🔗 تنظیم گوگل‌شیت دوم",
+    "لطفاً لینک کامل یا ID گوگل‌شیت دوم را وارد کنید:\n(برای لغو، کادر را خالی بگذارید)",
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (response.getSelectedButton() === ui.Button.OK) {
+    var inputUrl = response.getResponseText().trim();
+    if (!inputUrl) {
+      PropertiesService.getScriptProperties().deleteProperty("SECONDARY_SHEET_ID");
+      ui.alert("ℹ️ همگام‌سازی با شیت دوم غیرفعال شد.");
+      return;
+    }
+    var match = inputUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+    var targetId = match ? match[1] : inputUrl;
+    try {
+      var secSS = SpreadsheetApp.openById(targetId);
+      PropertiesService.getScriptProperties().setProperty("SECONDARY_SHEET_ID", targetId);
+      _setupSecondarySpreadsheet(secSS);
+      syncPermitsToSecondarySheet();
+      ui.alert("✅ همگام‌سازی کامل شد", "اتصال به گوگل‌شیت دوم برقرار گردید.\nاز این پس همه تغییرات (اپ + ویرایش دستی) به‌صورت خودکار در شیت دوم ذخیره می‌شود.", ui.ButtonSet.OK);
+    } catch (err) {
+      ui.alert("❌ خطا در اتصال به شیت دوم", String(err), ui.ButtonSet.OK);
+    }
+  }
+}
+
+function syncPermitsToSecondarySheet() {
+  try {
+    var ok = _mirrorSheetToSecondary(PERMIT_SHEET);
+    if (ok) {
+      _tryAudit('SYNC_SECONDARY', 'همگام‌سازی کامل پرمیت‌ها به شیت دوم', '', '', '', '', '');
+    }
+  } catch (err) {
+    Logger.log("Error syncing secondary sheet: " + err.toString());
+  }
+}
+
+function menuSetupSheets() {
+  var ui = SpreadsheetApp.getUi();
+  try {
+    var res = _doSetup(false);
+    ui.alert('✅ انجام شد', 'شیت‌ها با موفقیت آماده شدند.', ui.ButtonSet.OK);
+  } catch (err) {
+    ui.alert('❌ خطا', String(err), ui.ButtonSet.OK);
+  }
+}
+
+function menuResetUsers() {
+  var ui = SpreadsheetApp.getUi();
+  var ans = ui.alert('ریست کاربران', 'لیست کاربران ریست شود؟', ui.ButtonSet.YES_NO);
+  if (ans !== ui.Button.YES) return;
+  try {
+    _doSetup(true);
+    _tryAudit('RESET_USERS', 'ریست کامل شیت کاربران', '', '', '', '', '');
+    ui.alert('✅', 'شیت کاربران از نو ساخته شد.', ui.ButtonSet.OK);
+  } catch (err) {
+    ui.alert('❌ خطا', String(err), ui.ButtonSet.OK);
+  }
+}
+
+function menuHelp() {
+  SpreadsheetApp.getUi().alert('راهنما', 'سامانه پرمیت کارخانه فرآوری سرب و روی نسخه v16.1 - سیستم مجوزهای تکی: هر عملیات با تیک جداگانه در پنل مدیریت به کاربر داده می‌شود. کد کاربری (رمز ورود) در هیچ گزارش/تاریخچه‌ای نمایش داده نمی‌شود.', SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
+// -------------------- Clean Date / Time Helpers --------------------
+
+function _toEnglishDigits(val) {
+  if (!val) return '';
+  return String(val)
+    .replace(/[۰-۹]/g, function(d) { return '۰۱۲۳۴۵۶۷۸۹'.indexOf(d); })
+    .replace(/[٠-٩]/g, function(d) { return '٠١٢٣٤٥٦٧٨٩'.indexOf(d); });
+}
+
+function _cleanDateStr(val) {
+  if (!val) return '';
+  var s = String(val).trim();
+  if (!s || /1899/.test(s) || /^Column/i.test(s)) return '';
+  var faToEn = s.replace(/[۰-۹]/g, function(d) { return '۰۱۲۳۴۵۶۷۸۹'.indexOf(d); });
+  var jalaliDirect = faToEn.match(/\b(13\d{2}|14\d{2})[\/\-](0?[1-9]|1[0-2])[\/\-](0?[1-9]|[12]\d|3[01])\b/);
+  if (jalaliDirect) {
+    var y = jalaliDirect[1];
+    var m = jalaliDirect[2].length === 1 ? '0' + jalaliDirect[2] : jalaliDirect[2];
+    var d = jalaliDirect[3].length === 1 ? '0' + jalaliDirect[3] : jalaliDirect[3];
+    return y + '/' + m + '/' + d;
+  }
+  if (/GMT|Iran|Daylight|Standard|Sun|Mon|Tue|Wed|Thu|Fri|Sat/i.test(s)) {
+    var inTextJ = faToEn.match(/\b(13\d{2}|14\d{2})[\/\-](0?[1-9]|1[0-2])[\/\-](0?[1-9]|[12]\d|3[01])\b/);
+    if (inTextJ) {
+      return inTextJ[1] + '/' + (inTextJ[2].length === 1 ? '0' + inTextJ[2] : inTextJ[2]) + '/' + (inTextJ[3].length === 1 ? '0' + inTextJ[3] : inTextJ[3]);
+    }
+    var yearM = faToEn.match(/\b(13\d{2}|14\d{2}|20\d{2})\b/);
+    if (yearM) return yearM[1];
+  }
+  return s.replace(/-/g, '/');
+}
+
+function _cleanTimeStr(val) {
+  if (!val) return '';
+  var s = String(val).trim();
+  if (!s || s === '-' || /^Column/i.test(s)) return '';
+  var faToEn = s.replace(/[۰-۹]/g, function(d) { return '۰۱۲۳۴۵۶۷۸۹'.indexOf(d); });
+  var match = faToEn.match(/\b([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?\b/);
+  if (match) {
+    var hh = match[1].length === 1 ? '0' + match[1] : match[1];
+    var mm = match[2];
+    if (hh === '00' && mm === '00' && /GMT|140|130|202/.test(s)) return '';
+    return hh + ':' + mm;
+  }
+  return s;
+}
+
+// -------------------- Helpers & Multi-Sheet Sync --------------------
+
+function _ss() { return SpreadsheetApp.getActiveSpreadsheet(); }
+
+function _now() {
+  var now = new Date();
+  var timeZone = Session.getScriptTimeZone() || 'Asia/Tehran';
+  var jDateStr = _gregorianToJalali(now);
+  var timeStr = Utilities.formatDate(now, timeZone, 'HH:mm:ss');
+  return jDateStr + ' ' + timeStr;
+}
+
+function _isAdmin(code) {
+  return ADMIN_CODES.indexOf(String(code || '').trim()) !== -1;
+}
+
+function _isActiveStatus(status) {
+  var s = String(status || '').trim();
+  return s === 'فعال' || s === 'active' || s === 'Active' || s === 'TRUE' || s === 'true' || s === '1' || s === '';
+}
+
+function _getSecondarySpreadsheet() {
+  var hc = String(HARDCODED_SECONDARY_SHEET_ID || '').trim();
+  var targetId = hc || (PropertiesService.getScriptProperties().getProperty("SECONDARY_SHEET_ID") || "");
+  if (!targetId) return null;
+  try {
+    var mainId = _ss().getId();
+    if (mainId && targetId === mainId) return null; // شیت دوم نباید خودِ شیت اصلی باشد
+    return SpreadsheetApp.openById(targetId);
+  } catch (err) {
+    Logger.log("خطا در باز کردن شیت دوم: " + err.toString());
+    return null;
+  }
+}
+
+function _appendToSecondarySheet(sheetName, rowArray) {
+  try {
+    var secSS = _getSecondarySpreadsheet();
+    if (!secSS) return;
+    var secSh = secSS.getSheetByName(sheetName);
+    if (!secSh) {
+      secSh = secSS.insertSheet(sheetName);
+      if (sheetName === VISIT_SHEET) {
+        secSh.appendRow([
+          'زمان ثبت', 'شماره پرمیت', 'محل اجرا', 'نوع کار', 'مجری',
+          'نتیجه گشت', 'امتیاز چک‌لیست', 'بازدیدکننده HSE', 'کد بازدیدکننده',
+          'یادداشت و اقدام اصلاحی', 'جزئیات چک‌لیست', 'شناسه بازدید', 'لینک عکس Drive'
+        ]);
+        secSh.getRange(1, 1, 1, 13).setFontWeight('bold').setBackground('#ff6208').setFontColor('#ffffff');
+      }
+    }
+    secSh.appendRow(rowArray);
+  } catch (err) {
+    Logger.log("خطا در ثبت رویداد در شیت دوم (" + sheetName + "): " + err.toString());
+  }
+}
+
+function _setupSecondarySpreadsheet(secSS) {
+  if (!secSS) return;
+  var shV = secSS.getSheetByName(VISIT_SHEET);
+  if (!shV) {
+    shV = secSS.insertSheet(VISIT_SHEET);
+    shV.appendRow([
+      'زمان ثبت', 'شماره پرمیت', 'محل اجرا', 'نوع کار', 'مجری',
+      'نتیجه گشت', 'امتیاز چک‌لیست', 'بازدیدکننده HSE', 'کد بازدیدکننده',
+      'یادداشت و اقدام اصلاحی', 'جزئیات چک‌لیست', 'شناسه بازدید', 'لینک عکس Drive'
+    ]);
+    shV.getRange(1, 1, 1, 13).setFontWeight('bold').setBackground('#ff6208').setFontColor('#ffffff');
+  }
+  var shU = secSS.getSheetByName(USER_SHEET);
+  if (!shU) {
+    shU = secSS.insertSheet(USER_SHEET);
+    shU.appendRow(['کد', 'نام', 'نام‌خانوادگی', 'وضعیت', 'آخرین ورود', 'آخرین فعالیت', 'تعداد ورود', 'زمان قطع دسترسی', 'یادداشت', 'مجوز بازفعالسازی', 'مجوز ثبت پرمیت']);
+    shU.getRange(1, 1, 1, 11).setFontWeight('bold').setBackground('#1e3c5c').setFontColor('#ffffff');
+  }
+}
+
+// -------------------- Mirror Engine (آینه کامل به گوگل‌شیت دوم) --------------------
+
+/** آینه‌سازی کامل یک شیت به گوگل‌شیت دوم (اگر تنظیم شده باشد) */
+function _mirrorSheetToSecondary(sheetName) {
+  var secSS = _getSecondarySpreadsheet();
+  if (!secSS) return false;
+  try {
+    var src = _ss().getSheetByName(sheetName);
+    if (!src) return false;
+    var values = src.getDataRange().getDisplayValues();
+    var dst = secSS.getSheetByName(sheetName);
+    if (!dst) dst = secSS.insertSheet(sheetName);
+    dst.clearContents();
+    if (values.length > 0) {
+      dst.getRange(1, 1, values.length, values[0].length).setValues(values);
+      dst.getRange(1, 1, 1, values[0].length)
+        .setBackground('#f97316').setFontColor('#ffffff').setFontWeight('bold').setHorizontalAlignment('center');
+    }
+    dst.setFrozenRows(1);
+    return true;
+  } catch (err) {
+    Logger.log('Mirror error (' + sheetName + '): ' + err.toString());
+    return false;
+  }
+}
+
+/** آینه‌سازی همه شیت‌های کاربردی به شیت دوم (پرمیت، بازدیدها، کاربران، دانش، لاگ) */
+function _syncAllVisibleToSecondary() {
+  var names = [PERMIT_SHEET, VISIT_SHEET, USER_SHEET, KNOWLEDGE_SHEET, 'لاگ_عملکرد'];
+  var done = 0;
+  for (var i = 0; i < names.length; i++) {
+    if (_ss().getSheetByName(names[i])) {
+      if (_mirrorSheetToSecondary(names[i])) done++;
+    }
+  }
+  return done;
+}
+
+/** آینه‌سازی شیت به گوگل‌شیت دوم */
+function _mirrorThrottled(sheetName, seconds) {
+  return _mirrorSheetToSecondary(sheetName);
+}
+
+/**
+ * ثبت «تاریخچه تغییرات ردیف» در شیت دوم (همیشه Append-only، هرگز پاک نمی‌شود)
+ * نمایش: «مقدار قبل - توسط چه کسی - مقدار بعد» (مثال: 666 - توسط فرشید - 665)
+ */
+function _recordRowChange(permitNo, fieldName, oldVal, newVal, actorCode, actorName, actorEmail, extraNote) {
+  try {
+    // تاریخچه تغییرات در همان شیت لاگ ذخیره می‌شود تا پنل مدیریت بتواند آن را نمایش دهد و اکسل بگیرد
+    var sh = _historySheet();
+    var oldS = String(oldVal == null ? '' : oldVal).trim();
+    var newS = String(newVal == null ? '' : newVal).trim();
+    var name = String(actorName || '').trim();
+    var disp = oldS
+      ? (oldS + ' - توسط ' + (name || 'ناشناس') + ' - ' + newS)
+      : ((name ? name + ' ثبت کرد: ' : '') + newS);
+    sh.appendRow([_now(), String(permitNo || ''), String(fieldName || ''), oldS, newS, name, String(actorCode || ''), String(actorEmail || ''), disp, String(extraNote || '')]);
+  } catch (err) {
+    Logger.log('recordRowChange: ' + err.toString());
+  }
+}
+
+/** شیت «تاریخچه_تغییرات» در همان شیت‌نامه لاگ (جداگانه یا همین فایل) */
+function _historySheet() {
+  var ss = _getAuditSpreadsheet();
+  var sh = ss.getSheetByName('تاریخچه_تغییرات');
+  if (!sh) {
+    sh = ss.insertSheet('تاریخچه_تغییرات');
+    sh.appendRow(['زمان', 'شماره پرمیت', 'فیلد تغییر', 'مقدار قبل', 'مقدار بعد', 'توسط', 'کد کاربر', 'ایمیل', 'نمایش تغییر', 'نوع عمل']);
+    sh.getRange(1, 1, 1, 10).setFontWeight('bold').setBackground('#7c2d12').setFontColor('#ffffff');
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+/** همگام‌سازی اطمینان: هر ۵ دقیقه کل شیت‌ها را آینه می‌کند (ضمانت نهایی) */
+function autoMirrorSafetySync() {
+  var n = 0;
+  try { n = _syncAllVisibleToSecondary(); } catch (e) {}
+  return n;
+}
+
+/** نصب تریگر همگام‌سازی خودکار */
+function installAutoMirrorTrigger() {
+  var ui = null;
+  try { ui = SpreadsheetApp.getUi(); } catch (eUI) {}
+  try {
+    var triggers = ScriptApp.getProjectTriggers();
+    for (var i = 0; i < triggers.length; i++) {
+      if (triggers[i].getHandlerFunction() === 'autoMirrorSafetySync') {
+        ScriptApp.deleteTrigger(triggers[i]);
+      }
+    }
+    ScriptApp.newTrigger('autoMirrorSafetySync').timeBased().everyMinutes(1).create();
+    if (ui) {
+      ui.alert('✅ نصب شد', 'همگام‌سازی خودکار فعال شد: هر تغییر از اپ یا ویرایش دستی ظرف چند ثانیه در شیت دوم اعمال می‌شود + تریگر ضمانت هر ۱ دقیقه.', ui.ButtonSet.OK);
+    }
+  } catch (err) {
+    if (ui) ui.alert('❌ خطا در نصب', String(err), ui.ButtonSet.OK);
+  }
+}
+
+function _userSheet() {
+  var sh = _ss().getSheetByName(USER_SHEET);
+  if (!sh) {
+    _doSetup(true);
+    sh = _ss().getSheetByName(USER_SHEET);
+  }
+  _ensureUserGrantColumn();
+  return sh;
+}
+
+function _ensureUserGrantColumn() {
+  // اطمینان از وجود همه ستون‌های مجوز (۱۰ تا ۱۹ طبق USER_PERMS) در شیت کاربران
+  try {
+    var sh = _ss().getSheetByName(USER_SHEET);
+    if (!sh) return;
+    for (var i = 0; i < USER_PERMS.length; i++) {
+      var def = USER_PERMS[i];
+      var cur = String(sh.getRange(1, def.col).getValue() || '').trim();
+      if (!cur) sh.getRange(1, def.col).setValue(def.header);
+    }
+    sh.getRange(1, 10, 1, USER_PERMS.length)
+      .setFontWeight('bold').setBackground('#1e3c5c').setFontColor('#ffffff').setHorizontalAlignment('center');
+  } catch (e) {}
+}
+
+function _permitSheet() {
+  var sh = _ss().getSheetByName(PERMIT_SHEET);
+  if (!sh) {
+    sh = _ss().getSheetByName('پرمیت ها') || _ss().getSheetByName('پرمیت‌ها') || _ss().getSheetByName('Sheet1') || _ss().getSheetByName('برگه1') || _ss().getSheets()[0];
+  }
+  return sh;
+}
+
+function setupVisitsSheet() {
+  var ss = _ss();
+  var shV = ss.getSheetByName(VISIT_SHEET);
+  if (!shV) {
+    shV = ss.insertSheet(VISIT_SHEET);
+    shV.appendRow([
+      'زمان ثبت', 'شماره پرمیت', 'محل اجرا', 'نوع کار', 'مجری',
+      'نتیجه گشت', 'امتیاز چک‌لیست', 'بازدیدکننده HSE', 'کد بازدیدکننده',
+      'یادداشت و اقدام اصلاحی', 'جزئیات چک‌لیست', 'شناسه بازدید', 'لینک عکس Drive'
+    ]);
+    shV.getRange(1, 1, 1, 13).setFontWeight('bold').setBackground('#ff6208').setFontColor('#ffffff');
+  }
+  _setupSecondarySpreadsheet(_getSecondarySpreadsheet());
+  return shV;
+}
+
+function _doSetup(forceResetUsers) {
+  var ss = _ss();
+  var p = ss.getSheetByName(PERMIT_SHEET);
+  if (!p) {
+    var first = ss.getSheets()[0];
+    var firstName = first.getName();
+    if ((firstName === 'Sheet1' || firstName === 'برگه1' || firstName === 'ورق1') && first.getLastRow() <= 1) {
+      first.setName(PERMIT_SHEET);
+      p = first;
+    } else {
+      p = ss.insertSheet(PERMIT_SHEET);
+    }
+  }
+  var permitHeaders = [
+    'ردیف', 'تاریخ شروع', 'ساعت شروع', 'محل انجام کار', 'نوع کار', 'شرح کار',
+    'واحد درخواست‌کننده', 'تاریخ اتمام', 'ساعت اتمام', 'رد تایید فنی', 'تایید فنی',
+    'علت توقف', 'شماره پرمیت', 'مجری', 'وضعیت پرمیت'
+  ];
+  p.getRange(1, 1, 1, permitHeaders.length).setValues([permitHeaders]);
+  // تنظیم فرمت ستون‌های تاریخ شروع (B) و تاریخ اتمام (H) به متن ساده جهت جلوگیری از تبدیل خودکار گوگل‌شیت
+  p.getRange(2, 2, 999, 1).setNumberFormat('[$-fa-IR,16]yyyy/mm/dd');
+  p.getRange(2, 8, 999, 1).setNumberFormat('[$-fa-IR,16]yyyy/mm/dd');
+  // ستون‌های مبدا تمدید (Z = 26) و تعداد تمدید (AA = 27) برای قابلیت بازفعالسازی/تمدید حداکثر ۴ بار تا ۵ روز
+  _ensureReactivateColumns(p);
+  p.setFrozenRows(1);
+  p.getRange(1, 1, 1, permitHeaders.length)
+    .setBackground('#f97316')
+    .setFontColor('#ffffff')
+    .setFontWeight('bold')
+    .setHorizontalAlignment('center');
+  var u = ss.getSheetByName(USER_SHEET);
+  if (!u) {
+    u = ss.insertSheet(USER_SHEET);
+  }
+  // هدرهای پایه + ۱۰ هدر مجوز (از USER_PERMS) → ۱۹ ستون
+  var userHeaders = [
+    'کد', 'نام', 'نام‌خانوادگی', 'وضعیت', 'آخرین ورود',
+    'آخرین فعالیت', 'تعداد ورود', 'زمان قطع دسترسی', 'یادداشت'
+  ];
+  for (var uh = 0; uh < USER_PERMS.length; uh++) userHeaders.push(USER_PERMS[uh].header);
+  var needSeed = forceResetUsers || u.getLastRow() < 2;
+  if (needSeed) {
+    u.clear();
+    u.getRange(1, 1, 1, userHeaders.length).setValues([userHeaders]);
+    var seed = [];
+    for (var i = 0; i < DEFAULT_CODES.length; i++) {
+      var rowSeed = [DEFAULT_CODES[i], '', '', 'فعال', '', '', 0, '', ''];
+      for (var pc = 0; pc < USER_PERMS.length; pc++) rowSeed.push('');
+      seed.push(rowSeed);
+    }
+    u.getRange(2, 1, seed.length, userHeaders.length).setValues(seed);
+  } else {
+    u.getRange(1, 1, 1, userHeaders.length).setValues([userHeaders]);
+  }
+  u.setFrozenRows(1);
+  u.getRange(1, 1, 1, userHeaders.length)
+    .setBackground('#1e3c5c')
+    .setFontColor('#ffffff')
+    .setFontWeight('bold')
+    .setHorizontalAlignment('center');
+  setupVisitsSheet();
+  setupKnowledgeSheet();
+  return {
+    ok: true,
+    message: 'شیت‌ها و جداول ساخته شد',
+    sheets: [PERMIT_SHEET, USER_SHEET, VISIT_SHEET, KNOWLEDGE_SHEET],
+    userCount: DEFAULT_CODES.length
+  };
+}
+
+/** اطمینان از وجود ستون‌های مبدا تمدید (Z=26) و تعداد تمدید (AA=27) در شیت پرمیت */
+function _ensureReactivateColumns(sh) {
+  try {
+    sh = sh || _permitSheet();
+    if (String(sh.getRange(1, 26).getValue() || '').trim() === '') {
+      sh.getRange(1, 26).setValue('مبدا تمدید');
+    }
+    if (String(sh.getRange(1, 27).getValue() || '').trim() === '') {
+      sh.getRange(1, 27).setValue('تعداد تمدید');
+    }
+    if (String(sh.getRange(1, 28).getValue() || '').trim() === '') {
+      sh.getRange(1, 28).setValue('تمدید شده توسط');
+    }
+  } catch (e) {}
+}
+
+function _findUser(code) {
+  code = String(code || '').trim();
+  if (!code) return null;
+  var sh = _userSheet();
+  var last = sh.getLastRow();
+  if (last < 2) return null;
+  var maxCol = 9 + USER_PERMS.length; // ۱۹ ستون
+  var vals = sh.getRange(2, 1, last, maxCol).getDisplayValues();
+  for (var i = 0; i < vals.length; i++) {
+    if (String(vals[i][0]).trim() === code) {
+      var userObj = {
+        row: i + 2,
+        code: vals[i][0],
+        firstName: vals[i][1],
+        lastName: vals[i][2],
+        status: vals[i][3],
+        lastLogin: vals[i][4],
+        lastSeen: vals[i][5],
+        loginCount: vals[i][6],
+        revokedAt: vals[i][7],
+        note: vals[i][8]
+      };
+      // خواندن همه پرچم‌های مجوز (ستون‌های ۱۰ تا ۱۹)
+      for (var pi = 0; pi < USER_PERMS.length; pi++) {
+        var def = USER_PERMS[pi];
+        userObj[def.flag] = String(vals[i][def.col - 1] || '').trim() === 'مجاز';
+      }
+      return userObj;
+    }
+  }
+  return null;
+}
+
+/**
+ * احراز هویت مرکزی: کد را می‌گیرد و در صورت معتبر/فعال بودن، آبجکت کاربر را برمی‌گرداند.
+ * تمام اکشن‌های تغییردهنده وضعیت پرمیت (تایید/رد/بازرسی مجدد/بستن/گشت/تمدید) از این
+ * تابع برای احراز هویت استفاده می‌کنند.
+ */
+function _authenticate(code) {
+  code = String(code || '').trim();
+  if (!code) return { user: null, error: 'کد کاربری ارسال نشده است. لطفاً دوباره وارد شوید.' };
+  var u = _findUser(code);
+  if (!u) return { user: null, error: 'کد کاربری نامعتبر است.' };
+  if (!_isActiveStatus(u.status)) return { user: null, error: 'دسترسی این کد قطع شده است.' };
+  return { user: u, error: null };
+}
+
+/** بررسی مدیر بودن + فعال بودن دسترسی او (مدیر غیرفعال‌شده نباید همچنان دسترسی مدیریتی داشته باشد) */
+function _requireAdmin(code) {
+  code = String(code || '').trim();
+  if (!_isAdmin(code)) return false;
+  var u = _findUser(code);
+  if (u && !_isActiveStatus(u.status)) return false;
+  return true;
+}
+
+function _isHeaderOrPlaceholderRow(r) {
+  if (!r || !r.length) return true;
+  var col0 = String(r[0] != null ? r[0] : '').trim().toLowerCase();
+  var pNo = String(r[12] != null ? r[12] : '').trim().toLowerCase();
+  var allText = r.join(' ').toLowerCase();
+  if (/^column\s*\d+$/i.test(pNo) || /^column\s*\d+$/i.test(col0)) return true;
+  if (/^شماره\s*پرمیت$/i.test(pNo) || /^پرمیت$/i.test(pNo) || /^permit\s*no$/i.test(pNo)) return true;
+  if (/^ردیف$/i.test(col0) && /شماره\s*پرمیت/i.test(allText)) return true;
+  return false;
+}
+
+function _permitRows() {
+  var sh = _permitSheet();
+  var values = sh.getDataRange().getDisplayValues();
+  if (!values || values.length === 0) return [];
+  var colRadif = 0;          // ستون A
+  var colStartD = 1;         // ستون B
+  var colStartT = 2;         // ستون C
+  var colPlace = 3;          // ستون D
+  var colType = 4;           // ستون E
+  var colDesc = 5;           // ستون F
+  var colUnit = 6;           // ستون G
+  var colEndD = 7;           // ستون H
+  var colEndT = 8;           // ستون I
+  var colTechRej = 9;        // ستون J
+  var colTech = 10;          // ستون K
+  var colStop = 11;          // ستون L
+  var colPermitNo = 12;      // ستون M
+  var colContractor = 13;    // ستون N
+  var colStatus = 14;        // ستون O
+  var colReactBase = 25;     // ستون Z (26)
+  var colReactCount = 26;    // ستون AA (27)
+  var colReactivatedBy = 27; // ستون AB (28)
+  var startRowIndex = 0;
+  for (var hIdx = 0; hIdx < Math.min(values.length, 5); hIdx++) {
+    var rowText = values[hIdx].map(function(c) { return String(c || '').trim().toLowerCase(); });
+    if (_isHeaderOrPlaceholderRow(rowText)) {
+      startRowIndex = hIdx + 1;
+      rowText.forEach(function(h, idx) {
+        if (/شماره\s*پرمیت|^پرمیت$/i.test(h)) colPermitNo = idx;
+        else if (/وضعیت/i.test(h)) colStatus = idx;
+        else if (/پیمانکار|مجری|مجری\s*کار|اجراکننده|انجام\s*دهنده/i.test(h)) colContractor = idx;
+        else if (/رد\s*تایید|رد\s*فنی/i.test(h)) colTechRej = idx;
+        else if (/تایید\s*فنی|تأیید\s*فنی/i.test(h)) colTech = idx;
+        else if (/توقف/i.test(h)) colStop = idx;
+        else if (/تاریخ\s*شروع/i.test(h)) colStartD = idx;
+        else if (/ساعت\s*شروع/i.test(h)) colStartT = idx;
+        else if (/تاریخ\s*اتمام|انقضا/i.test(h)) colEndD = idx;
+        else if (/ساعت\s*اتمام/i.test(h)) colEndT = idx;
+        else if (/محل/i.test(h)) colPlace = idx;
+        else if (/نوع\s*کار|نوع\s*مجوز/i.test(h)) colType = idx;
+        else if (/شرح/i.test(h)) colDesc = idx;
+        else if (/واحد/i.test(h)) colUnit = idx;
+        else if (/ردیف|#|radif/i.test(h)) colRadif = idx;
+        else if (/مبدا\s*تمدید/i.test(h)) colReactBase = idx;
+        else if (/تعداد\s*تمدید/i.test(h)) colReactCount = idx;
+        else if (/تمدید\s*شده\s*توسط/i.test(h)) colReactivatedBy = idx;
+      });
+      break;
+    }
+  }
+  var rows = [];
+  for (var i = startRowIndex; i < values.length; i++) {
+    var r = values[i];
+    var isEmpty = true;
+    for (var k = 0; k < r.length; k++) {
+      if (String(r[k] || '').trim() !== '') { isEmpty = false; break; }
+    }
+    if (isEmpty || _isHeaderOrPlaceholderRow(r)) continue;
+    var pNoVal = r[colPermitNo] ? String(r[colPermitNo]).trim() : '';
+    if (!pNoVal || pNoVal === 'شماره پرمیت' || pNoVal === 'پرمیت' || /^Column/i.test(pNoVal)) continue;
+    var rawStatus = (r[colStatus] != null ? String(r[colStatus]) : '').trim();
+    if (!rawStatus) rawStatus = "در انتظار تایید";
+    // خواندن مجری/پیمانکار + پاکسازی مقادیر خراب
+    var rawContractor = r[colContractor] != null ? String(r[colContractor]).trim() : '';
+    if (!rawContractor || /^Column/i.test(rawContractor)) rawContractor = '—';
+    var reactCountVal = parseInt(String(r[colReactCount] || '0').trim(), 10);
+    if (isNaN(reactCountVal)) reactCountVal = 0;
+    var reactivatedByVal = r[colReactivatedBy] ? String(r[colReactivatedBy]).trim() : '';
+    rows.push({
+      radif: r[colRadif] || (i - startRowIndex + 1),
+      startDate: _cleanDateStr(r[colStartD]),
+      startTime: _cleanTimeStr(r[colStartT]),
+      place: r[colPlace] || '—',
+      type: r[colType] || 'عملیاتی',
+      desc: r[colDesc] || '—',
+      unit: r[colUnit] || '',
+      endDate: _cleanDateStr(r[colEndD]),
+      endTime: _cleanTimeStr(r[colEndT]),
+      techReject: r[colTechRej] || '',
+      tech: r[colTech] || '',
+      stopReason: r[colStop] || '',
+      permitNo: pNoVal,
+      contractor: rawContractor,
+      mojri: rawContractor,   // کلید دوم برای سازگاری با نسخه‌های HTML
+      permitStatus: rawStatus,
+      reactBase: r[colReactBase] ? String(r[colReactBase]) : '',  // ستون Z: مبدا تمدید
+      reactCount: reactCountVal,                                  // ستون AA: تعداد تمدید تاکنون
+      reactivatedBy: reactivatedByVal,                            // ستون AB: تمدید شده توسط
+      maxExtend: MAX_EXTEND_DAYS,
+      aiRisk: r[15] ? String(r[15]) : "",
+      aiCategory: r[16] ? String(r[16]) : "",
+      aiHazards: r[18] ? String(r[18]) : ""
+    });
+  }
+  return rows;
+}
+
+function _touchSeen(row) {
+  if (row) {
+    _userSheet().getRange(row, 6).setValue(_now());
+    _mirrorThrottled(USER_SHEET, 60);
+  }
+}
+
+function _checkDuplicateTxn(txnId) {
+  return false;
+}
+
+// -------------------- HTTP GET & POST Engine --------------------
+
+function doGet(e) {
+  try {
+    e = e || {};
+    var p = e.parameter || {};
+    var action = String(p.action || 'permits').toLowerCase();
+    var code = String(p.code || '').trim();
+    var cb = p.callback || p.jsonp || '';
+    var msgId = p.msgId || '';
+
+    if (action === 'ping' || action === 'test') {
+      return _json({ ok: true, message: 'API Active (Granular Perms Engine v16.5)', time: _now(), version: 'ptw-v16.5' }, cb, msgId);
+    }
+    if (action === 'visits') {
+      return handleGetVisits(p, cb, msgId);
+    }
+    if (action === 'listusers') {
+      return handleListUsers(code, cb, msgId);
+    }
+    if (action === 'adminlogs') {
+      return handleAdminLogs(p, cb, msgId);
+    }
+    if (action === 'adminhistory') {
+      return handleAdminHistory(p, cb, msgId);
+    }
+    if (action === 'adminhistoryexport') {
+      return handleAdminHistoryExport(p, cb, msgId);
+    }
+    if (action === 'adminstats') {
+      return handleAdminStats(code, cb, msgId);
+    }
+    if (action === 'adminexport') {
+      return handleAdminExport(p, cb, msgId);
+    }
+    if (action === 'adminbackups') {
+      return handleAdminBackups(code, cb, msgId);
+    }
+    if (action === 'analyzepermit') {
+      // v16: تحلیل AI یک عملیات دارای مجوز تکی است («مجوز تحلیل AI» - ستون ۱۹)
+      var aiAuth = _authenticate(code);
+      if (!aiAuth.user) return _json({ ok: false, error: aiAuth.error }, cb, msgId);
+      if (!_userHasPerm(aiAuth.user, 'analyze')) return _denyPerm('analyze', cb, msgId);
+      var targetPNo = String(p.permitNo || p.permitno || '').trim();
+      var workType = String(p.workType || p.worktype || '').trim();
+      var place = String(p.place || '').trim();
+      var desc = String(p.desc || '').trim();
+      var unit = String(p.unit || '').trim();
+      if (workType || place || desc) {
+        var aiResDirect = analyzeWorkWithAI(workType, place, desc, unit);
+        return _json({ ok: true, permitNo: targetPNo, analysis: aiResDirect }, cb, msgId);
+      }
+      var allP = _permitRows();
+      var foundP = null;
+      for (var iP = 0; iP < allP.length; iP++) {
+        if (String(allP[iP].permitNo).trim() === targetPNo) {
+          foundP = allP[iP];
+          break;
+        }
+      }
+      if (foundP) {
+        var aiResFound = analyzeWorkWithAI(foundP.type, foundP.place, foundP.desc, foundP.unit);
+        return _json({ ok: true, permitNo: targetPNo, analysis: aiResFound }, cb, msgId);
+      }
+      var aiResFallback = analyzeWorkWithAI("عملیاتی", targetPNo, "عملیات کارخانه فلوتاسیون سرب و روی", "");
+      return _json({ ok: true, permitNo: targetPNo, analysis: aiResFallback }, cb, msgId);
+    }
+
+    // بازخوانی سازگار در صورت ارسال سایر اکشن‌ها با GET
+    if (action === 'login') return _handleLogin(code, p.firstName, p.lastName, cb, msgId);
+    if (action === 'approvepermit') return handleApprovePermit(p, cb, msgId);
+    if (action === 'rejectpermit') return handleRejectPermit(p, cb, msgId);
+    if (action === 'reinspectpermit') return handleReinspectPermit(p, cb, msgId);
+    if (action === 'closepermit') return handleClosePermit(p, cb, msgId);
+    if (action === 'reactivatepermit') return handleReactivatePermit(p, cb, msgId);
+    if (action === 'setuseraccess') return handleSetUserAccess(p, cb, msgId);
+    if (action === 'setgrant') return handleSetGrant(p, cb, msgId);
+    if (action === 'setreactivation') return handleSetReactivation(p, cb, msgId);
+    if (action === 'setcreatepermit') return handleSetCreatePermit(p, cb, msgId);
+    if (action === 'createpermit') return handleCreatePermit(p, cb, msgId);
+    if (action === 'savepatrolvisit') return handleSavePatrolVisit(p, cb, msgId);
+    if (action === 'deletepermit') return handleDeletePermit(p, cb, msgId);
+    if (action === 'getunitssettings') return handleGetUnitsSettings(p, cb, msgId);
+    if (action === 'saveunitssettings') return handleSaveUnitsSettings(p, cb, msgId);
+
+    // پیش‌فرض: دریافت لیست پرمیت‌ها (action === 'permits')
+    var u = null;
+    if (code) {
+      u = _findUser(code);
+      if (u && _isActiveStatus(u.status)) {
+        _touchSeen(u.row);
+        _captureIdentity(u.code, u.firstName, u.lastName);
+      }
+    }
+    var rows = _permitRows();
+    return _json({
+      ok: true,
+      active: u ? _isActiveStatus(u.status) : true,
+      rows: rows,
+      count: rows.length,
+      sheetName: _permitSheet().getName(),
+      me: u ? _buildMe(u, code) : null,
+      nextPermitNo: _nextPermitNo(),
+      maxExtend: MAX_EXTEND_DAYS,
+      apiVersion: 'v16.5'
+    }, cb, msgId);
+  } catch (err) {
+    return _json({ ok: false, error: String(err) }, p ? p.callback : '', p ? p.msgId : '');
+  }
+}
+
+function doPost(e) {
+  try {
+    var body = {};
+    if (e && e.postData && e.postData.contents) {
+      try {
+        body = JSON.parse(e.postData.contents);
+      } catch (pe) {
+        body = e.parameter || {};
+      }
+    } else if (e && e.parameter) {
+      body = e.parameter;
+    }
+    var action = String(body.action || '').toLowerCase();
+    var code = String(body.code || body.actorCode || body.adminCode || '').trim();
+
+    if (action === 'ping' || action === 'test') {
+      return _json({ ok: true, message: 'API Active (Granular Perms Engine v16.5)', time: _now(), version: 'ptw-v16.5' });
+    }
+    if (action === 'login') {
+      return _handleLogin(code, body.firstName, body.lastName);
+    }
+    if (action === 'approvepermit') {
+      return handleApprovePermit(body);
+    }
+    if (action === 'rejectpermit') {
+      return handleRejectPermit(body);
+    }
+    if (action === 'reinspectpermit') {
+      return handleReinspectPermit(body);
+    }
+    if (action === 'closepermit') {
+      return handleClosePermit(body);
+    }
+    if (action === 'reactivatepermit') {
+      return handleReactivatePermit(body);
+    }
+    if (action === 'setuseraccess') {
+      return handleSetUserAccess(body);
+    }
+    if (action === 'setgrant') {
+      return handleSetGrant(body);
+    }
+    if (action === 'setreactivation') {
+      return handleSetReactivation(body);
+    }
+    if (action === 'setcreatepermit') {
+      return handleSetCreatePermit(body);
+    }
+    if (action === 'createpermit') {
+      return handleCreatePermit(body);
+    }
+    if (action === 'savepatrolvisit') {
+      return handleSavePatrolVisit(body);
+    }
+    if (action === 'deletepermit') {
+      return handleDeletePermit(body);
+    }
+    if (action === 'getunitssettings') {
+      return handleGetUnitsSettings(body);
+    }
+    if (action === 'saveunitssettings') {
+      return handleSaveUnitsSettings(body);
+    }
+    if (action === 'visits') {
+      return handleGetVisits(body);
+    }
+    if (action === 'listusers') {
+      return handleListUsers(code);
+    }
+    if (action === 'adminlogs') {
+      return handleAdminLogs(body);
+    }
+    if (action === 'adminhistory') {
+      return handleAdminHistory(body);
+    }
+    if (action === 'adminhistoryexport') {
+      return handleAdminHistoryExport(body);
+    }
+    if (action === 'adminstats') {
+      return handleAdminStats(code);
+    }
+    if (action === 'adminexport') {
+      return handleAdminExport(body);
+    }
+    if (action === 'adminbackups') {
+      return handleAdminBackups(code);
+    }
+    if (action === 'analyzepermit') {
+      // v16: مجوز تکی تحلیل AI (ستون ۱۹)
+      var aiAuth2 = _authenticate(code);
+      if (!aiAuth2.user) return _json({ ok: false, error: aiAuth2.error });
+      if (!_userHasPerm(aiAuth2.user, 'analyze')) return _denyPerm('analyze');
+      var targetPNo2 = String(body.permitNo || body.permitno || '').trim();
+      var workType2 = String(body.workType || body.worktype || '').trim();
+      var place2 = String(body.place || '').trim();
+      var desc2 = String(body.desc || '').trim();
+      var unit2 = String(body.unit || '').trim();
+      if (workType2 || place2 || desc2) {
+        var aiResDirect2 = analyzeWorkWithAI(workType2, place2, desc2, unit2);
+        return _json({ ok: true, permitNo: targetPNo2, analysis: aiResDirect2 });
+      }
+      var allP2 = _permitRows();
+      var foundP2 = null;
+      for (var iP2 = 0; iP2 < allP2.length; iP2++) {
+        if (String(allP2[iP2].permitNo).trim() === targetPNo2) {
+          foundP2 = allP2[iP2];
+          break;
+        }
+      }
+      if (foundP2) {
+        var aiResFound2 = analyzeWorkWithAI(foundP2.type, foundP2.place, foundP2.desc, foundP2.unit);
+        return _json({ ok: true, permitNo: targetPNo2, analysis: aiResFound2 });
+      }
+      var aiResFallback2 = analyzeWorkWithAI("عملیاتی", targetPNo2, "عملیات کارخانه فلوتاسیون سرب و روی", "");
+      return _json({ ok: true, permitNo: targetPNo2, analysis: aiResFallback2 });
+    }
+    if (action === 'permits' || action === '') {
+      var uP = null;
+      if (code) {
+        uP = _findUser(code);
+        if (uP && _isActiveStatus(uP.status)) {
+          _touchSeen(uP.row);
+          _captureIdentity(uP.code, uP.firstName, uP.lastName);
+        }
+      }
+      var rows = _permitRows();
+      return _json({
+        ok: true,
+        active: uP ? _isActiveStatus(uP.status) : true,
+        rows: rows,
+        count: rows.length,
+        sheetName: _permitSheet().getName(),
+        me: uP ? _buildMe(uP, code) : null,
+        nextPermitNo: _nextPermitNo(),
+        maxExtend: MAX_EXTEND_DAYS,
+        apiVersion: 'v16.5'
+      });
+    }
+    return _json({ ok: false, error: 'عملیات نامعتبر یا ناشناخته: ' + action });
+  } catch (err) {
+    return _json({ ok: false, error: String(err) });
+  }
+}
+
+// -------------------- Permit Action Handlers --------------------
+
+function handleRejectPermit(body, cb, embedMsgId) {
+  var authRes = _authenticate(body.rejectedByCode || body.code || body.actorCode);
+  if (!authRes.user) return _json({ ok: false, error: authRes.error }, cb, embedMsgId);
+  var u = authRes.user;
+  // v16: مجوز تکی «رد پرمیت» (مدیر ارشد همیشه مجاز است)
+  if (!_userHasPerm(u, 'reject')) return _denyPerm('reject', cb, embedMsgId);
+
+  var permitNo = String(body.permitNo || "").trim();
+  var reason = String(body.reason || "").trim();
+  var rejectedByName = ((u.firstName || '') + ' ' + (u.lastName || '')).trim() || String(body.rejectedByName || body.actorName || '').trim();
+  if (!permitNo) return _json({ ok: false, error: "شماره پرمیت الزامی است." }, cb, embedMsgId);
+
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+  } catch (eLock) {
+    return _json({ ok: false, error: 'سرور در حال حاضر مشغول است. لطفاً دوباره تلاش کنید.' }, cb, embedMsgId);
+  }
+  try {
+    var sh = _permitSheet();
+    var values = sh.getDataRange().getDisplayValues();
+    var colPermitNo = 12, colStatus = 14, colTechRej = 9;
+    for (var hIdx = 0; hIdx < Math.min(values.length, 5); hIdx++) {
+      var rT = values[hIdx].map(function(c) { return String(c || '').trim().toLowerCase(); });
+      if (_isHeaderOrPlaceholderRow(rT)) {
+        rT.forEach(function(h, idx) {
+          if (/شماره\s*پرمیت|^پرمیت$/i.test(h)) colPermitNo = idx;
+          else if (/وضعیت/i.test(h)) colStatus = idx;
+          else if (/رد\s*تایید|رد\s*فنی/i.test(h)) colTechRej = idx;
+        });
+        break;
+      }
+    }
+    var foundRow = -1;
+    for (var i = 1; i < values.length; i++) {
+      if (String(values[i][colPermitNo]).trim() === permitNo) {
+        foundRow = i + 1;
+        break;
+      }
+    }
+    if (foundRow > 0) {
+      var beforeReject = String(values[foundRow - 1][colStatus] || '').trim();
+      sh.getRange(foundRow, colStatus + 1).setValue('رد شده');
+      var rejLog = "رد توسط " + (rejectedByName || "کارشناس") + " در " + _now() + (reason ? " - علت: " + reason : "");
+      sh.getRange(foundRow, colTechRej + 1).setValue(rejLog);
+      syncPermitsToSecondarySheet();
+      _tryAudit('REJECT', 'رد پرمیت ' + permitNo + (reason ? ' - علت: ' + reason : ''), u.code, rejectedByName || '', beforeReject, 'رد شده', '');
+      _recordRowChange(permitNo, 'وضعیت پرمیت', beforeReject, 'رد شده', u.code, rejectedByName || '', '', 'REJECT');
+      return _json({ ok: true, permitNo: permitNo, message: "✓ پرمیت شماره " + permitNo + " رد شد و توضیحات در شیت ثبت گردید." }, cb, embedMsgId);
+    }
+    return _json({ ok: false, error: "پرمیت یافت نشد." }, cb, embedMsgId);
+  } finally {
+    try { lock.releaseLock(); } catch (eRel) {}
+  }
+}
+
+function handleReinspectPermit(body, cb, embedMsgId) {
+  var authRes = _authenticate(body.inspectorCode || body.code || body.actorCode);
+  if (!authRes.user) return _json({ ok: false, error: authRes.error }, cb, embedMsgId);
+  var u = authRes.user;
+  // v16: مجوز تکی «بازرسی مجدد» (قبلاً بدون هیچ کنترلی اجرا می‌شد)
+  if (!_userHasPerm(u, 'reinspect')) return _denyPerm('reinspect', cb, embedMsgId);
+
+  var permitNo = String(body.permitNo || "").trim();
+  var notes = String(body.notes || "").trim();
+  var inspectorName = ((u.firstName || '') + ' ' + (u.lastName || '')).trim() || String(body.inspectorName || body.actorName || '').trim();
+  var newStatus = String(body.newStatus || "فعال").trim();
+  if (!permitNo) return _json({ ok: false, error: "شماره پرمیت الزامی است." }, cb, embedMsgId);
+
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+  } catch (eLock) {
+    return _json({ ok: false, error: 'سرور در حال حاضر مشغول است. لطفاً دوباره تلاش کنید.' }, cb, embedMsgId);
+  }
+  try {
+    var sh = _permitSheet();
+    var values = sh.getDataRange().getDisplayValues();
+    var colPermitNo = 12, colStatus = 14, colTech = 10;
+    for (var hIdx = 0; hIdx < Math.min(values.length, 5); hIdx++) {
+      var rT = values[hIdx].map(function(c) { return String(c || '').trim().toLowerCase(); });
+      if (_isHeaderOrPlaceholderRow(rT)) {
+        rT.forEach(function(h, idx) {
+          if (/شماره\s*پرمیت|^پرمیت$/i.test(h)) colPermitNo = idx;
+          else if (/وضعیت/i.test(h)) colStatus = idx;
+          else if (/تایید\s*فنی|تأیید\s*فنی/i.test(h)) colTech = idx;
+        });
+        break;
+      }
+    }
+    var foundRow = -1;
+    for (var i = 1; i < values.length; i++) {
+      if (String(values[i][colPermitNo]).trim() === permitNo) {
+        foundRow = i + 1;
+        break;
+      }
+    }
+    if (foundRow > 0) {
+      var beforeStatus = String(values[foundRow - 1][colStatus] || '').trim();
+      sh.getRange(foundRow, colStatus + 1).setValue(newStatus);
+      var inspectLog = "بازرسی مجدد توسط " + inspectorName + " در " + _now() + (notes ? " - گزارش: " + notes : "");
+      sh.getRange(foundRow, colTech + 1).setValue(inspectLog);
+      syncPermitsToSecondarySheet();
+      _tryAudit('REINSPECT', 'بازرسی مجدد پرمیت ' + permitNo + ' | وضعیت جدید: ' + newStatus + (notes ? ' - گزارش: ' + notes : ''), u.code, inspectorName, beforeStatus, newStatus, '');
+      _recordRowChange(permitNo, 'وضعیت پرمیت', beforeStatus, newStatus + ' (بازرسی مجدد)', u.code, inspectorName, '', 'REINSPECT');
+      return _json({ ok: true, permitNo: permitNo, newStatus: newStatus, message: "✓ بازرسی مجدد پرمیت شماره " + permitNo + " ثبت و وضعیت به «" + newStatus + "» تغییر یافت." }, cb, embedMsgId);
+    }
+    return _json({ ok: false, error: "پرمیت یافت نشد." }, cb, embedMsgId);
+  } finally {
+    try { lock.releaseLock(); } catch (eRel) {}
+  }
+}
+
+function handleClosePermit(body, cb, embedMsgId) {
+  var authRes = _authenticate(body.closedByCode || body.code || body.actorCode);
+  if (!authRes.user) return _json({ ok: false, error: authRes.error }, cb, embedMsgId);
+  var u = authRes.user;
+  // v16: مجوز تکی «بستن دستی پرمیت» (مدیر ارشد همیشه مجاز است)
+  if (!_userHasPerm(u, 'close')) return _denyPerm('close', cb, embedMsgId);
+
+  var permitNo = String(body.permitNo || "").trim();
+  var reason = String(body.reason || "").trim();
+  var closedByName = ((u.firstName || '') + ' ' + (u.lastName || '')).trim() || String(body.closedByName || body.actorName || '').trim();
+  if (!permitNo) return _json({ ok: false, error: "شماره پرمیت الزامی است." }, cb, embedMsgId);
+
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+  } catch (eLock) {
+    return _json({ ok: false, error: 'سرور در حال حاضر مشغول است. لطفاً دوباره تلاش کنید.' }, cb, embedMsgId);
+  }
+  try {
+    var sh = _permitSheet();
+    var values = sh.getDataRange().getDisplayValues();
+    var colPermitNo = 12, colStatus = 14;
+    for (var hIdx = 0; hIdx < Math.min(values.length, 5); hIdx++) {
+      var rT = values[hIdx].map(function(c) { return String(c || '').trim().toLowerCase(); });
+      if (_isHeaderOrPlaceholderRow(rT)) {
+        rT.forEach(function(h, idx) {
+          if (/شماره\s*پرمیت|^پرمیت$/i.test(h)) colPermitNo = idx;
+          else if (/وضعیت/i.test(h)) colStatus = idx;
+        });
+        break;
+      }
+    }
+    var foundRow = -1;
+    for (var i = 1; i < values.length; i++) {
+      if (String(values[i][colPermitNo]).trim() === permitNo) {
+        foundRow = i + 1;
+        break;
+      }
+    }
+    if (foundRow > 0) {
+      var beforeClose = String(values[foundRow - 1][colStatus] || '').trim();
+      sh.getRange(foundRow, colStatus + 1).setValue('بسته');
+      syncPermitsToSecondarySheet();
+      _tryAudit('CLOSE_MANUAL', 'بستن دستی پرمیت ' + permitNo + (reason ? ' - علت: ' + reason : ''), u.code, closedByName, beforeClose, 'بسته', '');
+      _recordRowChange(permitNo, 'وضعیت پرمیت', beforeClose, 'بسته', u.code, closedByName, '', 'CLOSE_MANUAL');
+      return _json({ ok: true, permitNo: permitNo, message: "✓ پرمیت شماره " + permitNo + " به وضعیت بسته تغییر یافت." }, cb, embedMsgId);
+    }
+    return _json({ ok: false, error: "پرمیت یافت نشد." }, cb, embedMsgId);
+  } finally {
+    try { lock.releaseLock(); } catch (eRel) {}
+  }
+}
+
+function handleApprovePermit(body, cb, embedMsgId) {
+  var authRes = _authenticate(body.approvedByCode || body.code || body.actorCode);
+  if (!authRes.user) return _json({ ok: false, error: authRes.error }, cb, embedMsgId);
+  var u = authRes.user;
+  // v16: مجوز تکی «تأیید و فعال‌سازی پرمیت» (مدیر ارشد همیشه مجاز است)
+  if (!_userHasPerm(u, 'approve')) return _denyPerm('approve', cb, embedMsgId);
+
+  var permitNo = String(body.permitNo || "").trim();
+  if (!permitNo) return _json({ ok: false, error: "شماره پرمیت الزامی است." }, cb, embedMsgId);
+  var approvedByName = ((u.firstName || '') + ' ' + (u.lastName || '')).trim() || String(body.approvedByName || body.actorName || '').trim();
+
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+  } catch (eLock) {
+    return _json({ ok: false, error: 'سرور در حال حاضر مشغول است. لطفاً دوباره تلاش کنید.' }, cb, embedMsgId);
+  }
+  try {
+    var sh = _permitSheet();
+    var values = sh.getDataRange().getDisplayValues();
+    var colPermitNo = 12, colStatus = 14;
+    for (var hIdx = 0; hIdx < Math.min(values.length, 5); hIdx++) {
+      var rT = values[hIdx].map(function(c) { return String(c || '').trim().toLowerCase(); });
+      if (_isHeaderOrPlaceholderRow(rT)) {
+        rT.forEach(function(h, idx) {
+          if (/شماره\s*پرمیت|^پرمیت$/i.test(h)) colPermitNo = idx;
+          else if (/وضعیت/i.test(h)) colStatus = idx;
+        });
+        break;
+      }
+    }
+    var foundRow = -1;
+    for (var i = 1; i < values.length; i++) {
+      if (String(values[i][colPermitNo]).trim() === permitNo) {
+        foundRow = i + 1;
+        break;
+      }
+    }
+    if (foundRow > 0) {
+      var beforeApprove = String(values[foundRow - 1][colStatus] || '').trim();
+      sh.getRange(foundRow, colStatus + 1).setValue('فعال');
+      syncPermitsToSecondarySheet();
+      _tryAudit('APPROVE', 'تأیید و فعال‌سازی پرمیت ' + permitNo, u.code, approvedByName, beforeApprove, 'فعال', '');
+      _recordRowChange(permitNo, 'وضعیت پرمیت', beforeApprove, 'فعال', u.code, approvedByName, '', 'APPROVE');
+      return _json({ ok: true, permitNo: permitNo, message: "✓ پرمیت شماره " + permitNo + " تأیید و فعال گردید." }, cb, embedMsgId);
+    }
+    return _json({ ok: false, error: "پرمیت یافت نشد." }, cb, embedMsgId);
+  } finally {
+    try { lock.releaseLock(); } catch (eRel) {}
+  }
+}
+
+// -------------------- Permit Reactivation / Extension (تمدید پرمیت - مجوز تکی + سقف ۴ بار) --------------------
+
+/**
+ * تمدید/بازفعالسازی یک پرمیت «بسته» یا «رد شده».
+ * v16: نیازمند مجوز تکی «تمدید و بازفعال‌سازی» (ستون ۱۰ کاربران) است؛ مدیر ارشد همیشه مجاز و نامحدود است.
+ * - کاربران عادی دارای مجوز: حداکثر ۴ بار (MAX_EXTEND_DAYS) می‌توانند تمدید کنند (مجموعاً ۵ روز از روز صدور).
+ * - هر بار تمدید تا پایان شیفت ۱۲ ساعته جاری محاسبه می‌شود (۷ تا ۱۹ روز / ۱۹ تا ۷ شب) — دقیقاً همان
+ *   ستون‌های «تاریخ اتمام»/«ساعت اتمام» که autoCloseExpiredPermits برای بستن خودکار می‌خواند، به‌روزرسانی می‌شوند
+ *   تا زمان بسته‌شدن خودکار پرمیت بازفعال‌شده، دقیقاً منطبق با زمان‌بندی شیفت جدید باشد.
+ * - نام و زمان تمدیدکننده از هویت امن سرور در ستون AB (تمدید شده توسط) ثبت می‌شود.
+ */
+function handleReactivatePermit(body, cb, embedMsgId) {
+  var authRes = _authenticate(body.code || body.reactivatedByCode || body.actorCode);
+  if (!authRes.user) return _json({ ok: false, error: authRes.error }, cb, embedMsgId);
+  var u = authRes.user;
+  var permitNo = String(body.permitNo || "").trim();
+  if (!permitNo) return _json({ ok: false, error: "شماره پرمیت الزامی است." }, cb, embedMsgId);
+
+  // v16: مجوز تکی تمدید/بازفعال‌سازی — مدیر استثناست (همیشه مجاز و بدون سقف)
+  var isAdm = _isAdmin(u.code);
+  if (!isAdm && u.hasReactivate !== true) {
+    return _denyPerm('reactivate', cb, embedMsgId);
+  }
+
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+  } catch (eLock) {
+    return _json({ ok: false, error: 'سرور در حال حاضر مشغول است. لطفاً دوباره تلاش کنید.' }, cb, embedMsgId);
+  }
+  try {
+    var sh = _permitSheet();
+    _ensureReactivateColumns(sh);
+    var values = sh.getDataRange().getDisplayValues();
+    var col = { permitNo: 12, status: 14, startD: 1, startT: 2, endD: 7, endT: 8, reactBase: 25, reactCount: 26, reactivatedBy: 27 };
+    for (var hIdx = 0; hIdx < Math.min(values.length, 5); hIdx++) {
+      var rT = values[hIdx].map(function(c) { return String(c || '').trim().toLowerCase(); });
+      if (_isHeaderOrPlaceholderRow(rT)) {
+        rT.forEach(function(h, idx) {
+          if (/شماره\s*پرمیت|^پرمیت$/i.test(h)) col.permitNo = idx;
+          else if (/وضعیت/i.test(h)) col.status = idx;
+          else if (/تاریخ\s*شروع/i.test(h)) col.startD = idx;
+          else if (/ساعت\s*شروع/i.test(h)) col.startT = idx;
+          else if (/تاریخ\s*اتمام|انقضا/i.test(h)) col.endD = idx;
+          else if (/ساعت\s*اتمام/i.test(h)) col.endT = idx;
+          else if (/مبدا\s*تمدید/i.test(h)) col.reactBase = idx;
+          else if (/تعداد\s*تمدید/i.test(h)) col.reactCount = idx;
+          else if (/تمدید\s*شده\s*توسط/i.test(h)) col.reactivatedBy = idx;
+        });
+        break;
+      }
+    }
+    var foundRow = -1;
+    for (var i = 1; i < values.length; i++) {
+      if (String(values[i][col.permitNo]).trim() === permitNo) { foundRow = i + 1; break; }
+    }
+    if (foundRow < 0) return _json({ ok: false, error: "پرمیت یافت نشد." }, cb, embedMsgId);
+    var rowVals = values[foundRow - 1];
+    var currentStatus = String(rowVals[col.status] || '').trim();
+    if (currentStatus !== 'بسته' && currentStatus !== 'رد شده') {
+      return _json({ ok: false, error: 'فقط پرمیت‌های «بسته» یا «رد شده» قابل تمدید هستند. وضعیت فعلی: ' + (currentStatus || '—') }, cb, embedMsgId);
+    }
+    var reactCount = parseInt(String(rowVals[col.reactCount] || '0').trim(), 10);
+    if (isNaN(reactCount)) reactCount = 0;
+
+    // محدودیت ۴ بار فقط برای کاربران عادی دارای مجوز (مدیر نامحدود است)
+    if (!isAdm && reactCount >= MAX_EXTEND_DAYS) {
+      return _json({ ok: false, error: 'شما به حداکثر تعداد تمدید مجاز (' + MAX_EXTEND_DAYS + ' بار) رسیده‌اید.' }, cb, embedMsgId);
+    }
+
+    // محاسبه پایان جدید (تا پایان شیفت ۱۲ ساعته جاری)
+    var now = new Date();
+    var timeZone = Session.getScriptTimeZone() || 'Asia/Tehran';
+    var todayFaStr = _gregorianToJalali(now);
+    var nowHour = parseInt(Utilities.formatDate(now, timeZone, 'HH'), 10);
+    var newEndDate, newEndTime;
+    if (nowHour >= 7 && nowHour < 19) {
+      newEndDate = todayFaStr; newEndTime = '19:00';
+    } else if (nowHour >= 19) {
+      newEndDate = _addDaysToJalali(todayFaStr, 1); newEndTime = '07:00';
+    } else {
+      newEndDate = todayFaStr; newEndTime = '07:00';
+    }
+
+    // بدون محدودیت روز (فقط کنترل بر اساس تعداد دفعات: حداکثر ۴ بار برای کاربر عادی / نامحدود برای مدیر)
+    var reactBase = String(rowVals[col.reactBase] || '').trim();
+    if (!reactBase) {
+      reactBase = _cleanDateStr(rowVals[col.startD]) || _cleanDateStr(rowVals[col.endD]);
+    }
+
+    // ثبت هویت کاربر احرازهویت‌شده در سرور
+    var actorName = ((u.firstName || '') + ' ' + (u.lastName || '')).trim() || String(body.reactivatedByName || body.actorName || u.code).trim();
+    var beforeStatus = currentStatus;
+
+    // ذخیره در شیت
+    sh.getRange(foundRow, col.status + 1).setValue('فعال');
+    sh.getRange(foundRow, col.endD + 1).setValue(newEndDate);
+    sh.getRange(foundRow, col.endT + 1).setValue(newEndTime);
+    sh.getRange(foundRow, col.reactBase + 1).setValue(reactBase);
+    sh.getRange(foundRow, col.reactCount + 1).setValue(reactCount + 1);
+    sh.getRange(foundRow, (col.reactivatedBy !== undefined ? col.reactivatedBy + 1 : 28)).setValue(actorName + ' - ' + _now());
+    try { sh.getRange(foundRow, col.endD + 1).setNumberFormat('[$-fa-IR,16]yyyy/mm/dd'); } catch (eFmt) {}
+
+    syncPermitsToSecondarySheet();
+
+    // لاگ و پاسخ
+    var remain = isAdm ? 'نامحدود' : (MAX_EXTEND_DAYS - (reactCount + 1));
+    _tryAudit('REACTIVATE', 'تمدید پرمیت ' + permitNo + ' توسط ' + actorName + (isAdm ? ' (مدیر - بدون محدودیت)' : ' (دفعه ' + (reactCount + 1) + ' از ' + MAX_EXTEND_DAYS + ')'), u.code, actorName, beforeStatus, 'فعال', '');
+    _recordRowChange(permitNo, 'وضعیت پرمیت', beforeStatus, 'فعال (تمدید تا ' + newEndDate + ' ' + newEndTime + (isAdm ? ' - مدیر' : '') + ')', u.code, actorName, '', 'REACTIVATE');
+    return _json({
+      ok: true,
+      permitNo: permitNo,
+      newStatus: 'فعال',
+      endDate: newEndDate,
+      endTime: newEndTime,
+      newEndDate: newEndDate,
+      newEndTime: newEndTime,
+      extendCount: reactCount + 1,
+      maxExtend: isAdm ? 'نامحدود' : MAX_EXTEND_DAYS,
+      remainingExtends: remain,
+      isAdmin: isAdm,
+      reactivatedBy: actorName + ' - ' + _now(),
+      message: isAdm
+        ? '✓ پرمیت شماره ' + permitNo + ' توسط مدیر تمدید شد و تا ' + newEndDate + ' ساعت ' + newEndTime + ' فعال است. (بدون محدودیت)'
+        : '✓ پرمیت شماره ' + permitNo + ' تمدید شد (دفعه ' + (reactCount + 1) + ' از ' + MAX_EXTEND_DAYS + ') و تا ' + newEndDate + ' ساعت ' + newEndTime + ' فعال است.' + (remain <= 0 ? ' ⚠️ این آخرین تمدید مجاز بود.' : '')
+    }, cb, embedMsgId);
+  } finally {
+    try { lock.releaseLock(); } catch (eRel) {}
+  }
+}
+
+// -------------------- Grant Management (Admin) --------------------
+
+/**
+ * منوی شیت: مدیریت مجوز بازفعالسازی/تمدید (فقط افرادی که به شیت دسترسی دارند)
+ * YES = صدور مجوز | NO = لغو مجوز
+ */
+function menuManageReactivationGrants() {
+  var ui = SpreadsheetApp.getUi();
+  var response = ui.prompt(
+    '🔑 مدیریت مجوز بازفعالسازی/تمدید',
+    'کد ۸ رقمی کاربر هدف را وارد کنید:',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+  var targetCode = String(response.getResponseText() || '').trim();
+  if (!/^\d{8}$/.test(targetCode)) {
+    ui.alert('❌ خطا', 'کد باید ۸ رقم باشد.', ui.ButtonSet.OK);
+    return;
+  }
+  var u = _findUser(targetCode);
+  if (!u) {
+    ui.alert('❌ خطا', 'کاربر با این کد یافت نشد.', ui.ButtonSet.OK);
+    return;
+  }
+  var already = u.hasReactivate === true;
+  var ans = ui.alert(
+    'مجوز فعلی: ' + (already ? '✅ مجاز' : '⛔ بدون مجوز'),
+    'برای کد ' + targetCode + ' (' + (u.firstName || '') + ' ' + (u.lastName || '') + ')\n' +
+    '✅ بله = صدور مجوز تمدید | ❌ خیر = لغو مجوز',
+    ui.ButtonSet.YES_NO
+  );
+  if (ans === ui.Button.YES) {
+    _userSheet().getRange(u.row, 10).setValue('مجاز');
+    ui.alert('✅ انجام شد', 'مجوز بازفعالسازی برای کد ' + targetCode + ' صادر شد.', ui.ButtonSet.OK);
+  } else if (ans === ui.Button.NO) {
+    _userSheet().getRange(u.row, 10).setValue('');
+    ui.alert('✅ انجام شد', 'مجوز بازفعالسازی برای کد ' + targetCode + ' لغو شد.', ui.ButtonSet.OK);
+  }
+}
+
+/** لیست کاربران با همه پرچم‌های مجوز (فقط مدیر ارشد) */
+function handleListUsers(code, cb, embedMsgId) {
+  if (!_requireAdmin(code)) return _json({ ok: false, error: 'فقط مدیر ارشد مجاز است.' }, cb, embedMsgId);
+  _ensureUserGrantColumn();
+  var sh = _userSheet();
+  var last = sh.getLastRow();
+  var users = [];
+  var maxCol = 9 + USER_PERMS.length;
+  if (last >= 2) {
+    var vals = sh.getRange(2, 1, last, maxCol).getDisplayValues();
+    for (var i = 0; i < vals.length; i++) {
+      var c = String(vals[i][0]).trim();
+      if (!c) continue;
+      var usr = {
+        code: c,
+        firstName: String(vals[i][1] || ''),
+        lastName: String(vals[i][2] || ''),
+        status: String(vals[i][3] || ''),
+        lastLogin: String(vals[i][4] || ''),
+        isAdminUser: _isAdmin(c),
+        perms: {}
+      };
+      for (var pi = 0; pi < USER_PERMS.length; pi++) {
+        var def = USER_PERMS[pi];
+        var hasIt = String(vals[i][def.col - 1] || '').trim() === 'مجاز';
+        usr[def.flag] = hasIt;
+        usr.perms[def.key] = hasIt;
+      }
+      users.push(usr);
+    }
+  }
+  var permDefs = [];
+  for (var pi2 = 0; pi2 < USER_PERMS.length; pi2++) {
+    permDefs.push({ key: USER_PERMS[pi2].key, label: USER_PERMS[pi2].label, header: USER_PERMS[pi2].header });
+  }
+  return _json({ ok: true, users: users, permDefs: permDefs }, cb, embedMsgId);
+}
+
+/**
+ * v16: صدور/لغو هر مجوز به‌صورت تکی (فقط مدیر ارشد)
+ * پارامترها: code (کد مدیر), targetCode (کد کاربر هدف), perm (کلید مجوز: createPermit/approve/reject/
+ * reinspect/close/reactivate/patrol/delete/units/analyze), grant (true/false)
+ */
+
+/** قطع / وصل دسترسی کاربر (فقط مدیر ارشد). ستون وضعیت + زمان قطع */
+function handleSetUserAccess(body, cb, embedMsgId) {
+  var adminCode = String(body.code || body.adminCode || '').trim();
+  if (!_requireAdmin(adminCode)) return _json({ ok: false, error: 'فقط مدیر ارشد مجاز است.' }, cb, embedMsgId);
+  var targetCode = String(body.targetCode || '').trim();
+  if (!/^\d{8}$/.test(targetCode)) return _json({ ok: false, error: 'کد کاربر هدف نامعتبر است.' }, cb, embedMsgId);
+  if (_isAdmin(targetCode)) return _json({ ok: false, error: 'دسترسی مدیر ارشد را نمی‌توان قطع کرد.' }, cb, embedMsgId);
+  if (targetCode === adminCode) return _json({ ok: false, error: 'نمی‌توانید دسترسی خودتان را قطع کنید.' }, cb, embedMsgId);
+  var u = _findUser(targetCode);
+  if (!u) return _json({ ok: false, error: 'کاربر موردنظر یافت نشد.' }, cb, embedMsgId);
+  var active = body.active === true || String(body.active) === 'true' || String(body.active) === '1';
+  var sh = _userSheet();
+  sh.getRange(u.row, 4).setValue(active ? 'فعال' : 'غیرفعال');
+  sh.getRange(u.row, 8).setValue(active ? '' : _now());
+  _mirrorThrottled(USER_SHEET);
+  var targetName = ((u.firstName || '') + ' ' + (u.lastName || '')).trim() || targetCode;
+  _tryAudit(active ? 'ACCESS_ON' : 'ACCESS_OFF',
+    (active ? 'وصل مجدد دسترسی ' : 'قطع دسترسی ') + targetName + ' (کد ' + targetCode + ')',
+    adminCode, '', u.status || '', active ? 'فعال' : 'غیرفعال', '');
+  return _json({
+    ok: true,
+    targetCode: targetCode,
+    active: active,
+    status: active ? 'فعال' : 'غیرفعال',
+    message: active
+      ? ('✓ دسترسی ' + targetName + ' دوباره فعال شد.')
+      : ('⛔ دسترسی ' + targetName + ' قطع شد. دیگر نمی‌تواند وارد سامانه شود.')
+  }, cb, embedMsgId);
+}
+
+function handleSetGrant(body, cb, embedMsgId) {
+  var adminCode = String(body.code || body.adminCode || '').trim();
+  if (!_requireAdmin(adminCode)) return _json({ ok: false, error: 'فقط مدیر ارشد مجاز است.' }, cb, embedMsgId);
+  var targetCode = String(body.targetCode || '').trim();
+  var permKey = String(body.perm || body.permKey || '').trim();
+  var def = _permDef(permKey);
+  if (!def) return _json({ ok: false, error: 'نوع مجوز نامعتبر است: ' + (permKey || '—') }, cb, embedMsgId);
+  var grant = body.grant === true || String(body.grant) === 'true';
+  if (!/^\d{8}$/.test(targetCode)) return _json({ ok: false, error: 'کد کاربر هدف نامعتبر است.' }, cb, embedMsgId);
+  if (_isAdmin(targetCode)) return _json({ ok: false, error: 'مدیر ارشد به صورت دائمی همه مجوزها را دارد و نیازی به تنظیم تیک ندارد.' }, cb, embedMsgId);
+  var u = _findUser(targetCode);
+  if (!u) return _json({ ok: false, error: 'کاربر موردنظر یافت نشد.' }, cb, embedMsgId);
+  _ensureUserGrantColumn();
+  _userSheet().getRange(u.row, def.col).setValue(grant ? 'مجاز' : '');
+  _mirrorThrottled(USER_SHEET);
+  var targetName = ((u.firstName || '') + ' ' + (u.lastName || '')).trim() || targetCode;
+  _tryAudit('GRANT_CHANGE', (grant ? 'اعطای مجوز «' + def.label + '»' : 'لغو مجوز «' + def.label + '»') + ' برای ' + targetName + ' (کد ' + targetCode + ') توسط مدیر', adminCode, '', '', grant ? 'مجاز' : 'بدون مجوز', '');
+  return _json({
+    ok: true,
+    targetCode: targetCode,
+    perm: permKey,
+    grant: grant,
+    message: grant
+      ? ('✓ مجوز «' + def.label + '» برای ' + targetName + ' (' + targetCode + ') صادر شد.')
+      : ('✕ مجوز «' + def.label + '» برای ' + targetName + ' (' + targetCode + ') لغو شد.')
+  }, cb, embedMsgId);
+}
+
+/** سازگاری با پنل قدیمی: setreactivation → ستون ۱۰ «مجوز بازفعالسازی» */
+function handleSetReactivation(body, cb, embedMsgId) {
+  body = body || {};
+  body.perm = 'reactivate';
+  return handleSetGrant(body, cb, embedMsgId);
+}
+
+/** سازگاری با پنل قدیمی: setcreatepermit → ستون ۱۱ «مجوز ثبت پرمیت» */
+function handleSetCreatePermit(body, cb, embedMsgId) {
+  body = body || {};
+  body.perm = 'createPermit';
+  return handleSetGrant(body, cb, embedMsgId);
+}
+
+// -------------------- Manual Permit Creation (ثبت دستی پرمیت از اپ) --------------------
+
+/**
+ * ثبت دستی پرمیت از HTML (نیازمند مجوز تکی «ثبت پرمیت» یا مدیر ارشد)
+ * همه آیتم‌های پرمیت در شیت ذخیره می‌شود؛ شماره پرمیت باید ارسال شود؛
+ * وضعیت اولیه «در انتظار تایید» است تا مراحل تایید مثل قبل طی شود.
+ */
+function handleCreatePermit(body, cb, embedMsgId) {
+  var code = String(body.code || body.actorCode || '').trim();
+  var u = _findUser(code);
+  if (!u || !_isActiveStatus(u.status)) return _json({ ok: false, error: 'کد نامعتبر یا دسترسی قطع است.' }, cb, embedMsgId);
+  var isAdm = _isAdmin(code);
+  if (!isAdm && u.hasCreatePermit !== true) return _denyPerm('createPermit', cb, embedMsgId);
+
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+  } catch (eLock) {
+    return _json({ ok: false, error: 'سرور در حال حاضر مشغول است. لطفاً دوباره تلاش کنید.' }, cb, embedMsgId);
+  }
+  try {
+    var firstName = String(body.firstName || u.firstName || '').trim();
+    var lastName = String(body.lastName || u.lastName || '').trim();
+    var fullName = ((firstName + ' ' + lastName).trim()) || String(body.fullName || body.createdByName || body.actorName || '').trim();
+    var startDate = _cleanDateStr(String(body.startDate || '').trim());
+    var startTime = _cleanTimeStr(String(body.startTime || '').trim());
+    var place = String(body.place || '').trim();
+    var type = String(body.type || '').trim();
+    var desc = String(body.desc || '').trim();
+    var unit = String(body.unit || '').trim();
+    var endDate = _cleanDateStr(String(body.endDate || '').trim());
+    var endTime = _cleanTimeStr(String(body.endTime || '').trim());
+    var contractor = String(body.contractor || '').trim();
+    var requestedNo = _toEnglishDigits(String(body.permitNo || '').trim());
+
+    if (!startDate) return _json({ ok: false, error: 'تاریخ شروع الزامی است.' }, cb, embedMsgId);
+    if (!startTime) startTime = '07:00';
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime)) return _json({ ok: false, error: 'ساعت شروع نامعتبر است.' }, cb, embedMsgId);
+    if (!place) return _json({ ok: false, error: 'محل انجام کار الزامی است.' }, cb, embedMsgId);
+    if (!type) return _json({ ok: false, error: 'نوع کار الزامی است.' }, cb, embedMsgId);
+    if (!desc) return _json({ ok: false, error: 'شرح کار الزامی است.' }, cb, embedMsgId);
+    if (!contractor) return _json({ ok: false, error: 'مجری/پیمانکار الزامی است.' }, cb, embedMsgId);
+    if (endDate && !endTime) endTime = '19:00';
+    if (endTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(endTime)) return _json({ ok: false, error: 'ساعت اتمام نامعتبر است.' }, cb, embedMsgId);
+
+    var sh = _permitSheet();
+    var values = sh.getDataRange().getDisplayValues();
+    var col = { radif: 0, startD: 1, startT: 2, place: 3, type: 4, desc: 5, unit: 6, endD: 7, endT: 8, techRej: 9, tech: 10, stop: 11, permitNo: 12, contractor: 13, status: 14 };
+    var headerLen = 15;
+    for (var hIdx = 0; hIdx < Math.min(values.length, 5); hIdx++) {
+      var rT = values[hIdx].map(function(c) { return String(c || '').trim().toLowerCase(); });
+      if (_isHeaderOrPlaceholderRow(rT)) {
+        headerLen = Math.max(headerLen, rT.length);
+        rT.forEach(function(h, idx) {
+          if (/شماره\s*پرمیت|^پرمیت$/i.test(h)) col.permitNo = idx;
+          else if (/وضعیت/i.test(h)) col.status = idx;
+          else if (/پیمانکار|مجری|مجری\s*کار|اجراکننده/i.test(h)) col.contractor = idx;
+          else if (/تاریخ\s*شروع/i.test(h)) col.startD = idx;
+          else if (/ساعت\s*شروع/i.test(h)) col.startT = idx;
+          else if (/تاریخ\s*اتمام|انقضا/i.test(h)) col.endD = idx;
+          else if (/ساعت\s*اتمام/i.test(h)) col.endT = idx;
+          else if (/محل/i.test(h)) col.place = idx;
+          else if (/نوع\s*کار|نوع\s*مجوز/i.test(h)) col.type = idx;
+          else if (/شرح/i.test(h)) col.desc = idx;
+          else if (/واحد/i.test(h)) col.unit = idx;
+          else if (/رد\s*تایید|رد\s*فنی/i.test(h)) col.techRej = idx;
+          else if (/تایید\s*فنی|تأیید\s*فنی/i.test(h)) col.tech = idx;
+          else if (/توقف/i.test(h)) col.stop = idx;
+          else if (/ردیف|#|radif/i.test(h)) col.radif = idx;
+        });
+        break;
+      }
+    }
+
+    var maxNo = 0;
+    for (var i = 1; i < values.length; i++) {
+      var pn = String(values[i][col.permitNo] || '').trim().replace(/\D/g, '');
+      var n = parseInt(pn, 10);
+      if (!isNaN(n) && n > maxNo) maxNo = n;
+    }
+    var permitNo;
+    if (requestedNo) {
+      for (var d = 1; d < values.length; d++) {
+        if (String(values[d][col.permitNo] || '').trim() === requestedNo) {
+          return _json({ ok: false, error: 'شماره پرمیت ' + requestedNo + ' قبلاً در سیستم استفاده شده است.' }, cb, embedMsgId);
+        }
+      }
+      permitNo = requestedNo;
+    } else {
+      return _json({ ok: false, error: 'شماره پرمیت الزامی است و نباید خالی باشد (بدون پیش‌فرض).' }, cb, embedMsgId);
+    }
+
+    var maxRadif = 0;
+    for (var ri = 1; ri < values.length; ri++) {
+      var rf = parseInt(String(values[ri][col.radif] || '').replace(/\D/g, ''), 10);
+      if (!isNaN(rf) && rf > maxRadif) maxRadif = rf;
+    }
+    var radifVal = maxRadif > 0 ? String(maxRadif + 1) : '';
+
+    var width = Math.max(headerLen, 15, col.status + 1, col.contractor + 1, col.permitNo + 1);
+    var newRow = [];
+    for (var w = 0; w < width; w++) newRow.push('');
+    newRow[col.radif]  = radifVal;
+    newRow[col.startD] = startDate;
+    newRow[col.startT] = startTime;
+    newRow[col.place]  = place;
+    newRow[col.type]   = type;
+    newRow[col.desc]   = desc;
+    newRow[col.unit]   = unit;
+    newRow[col.endD]   = endDate;
+    newRow[col.endT]   = endTime;
+    newRow[col.permitNo]    = permitNo;
+    newRow[col.contractor]  = contractor;
+    newRow[col.status]      = 'در انتظار تایید';
+
+    sh.appendRow(newRow);
+    var newRowIndex = sh.getLastRow();
+    try {
+      sh.getRange(newRowIndex, col.startD + 1).setNumberFormat('[$-fa-IR,16]yyyy/mm/dd');
+      sh.getRange(newRowIndex, col.endD + 1).setNumberFormat('[$-fa-IR,16]yyyy/mm/dd');
+    } catch (eFmt) {}
+
+    _tryAudit('CREATE_PERMIT', 'ثبت دستی پرمیت ' + permitNo + ' | محل: ' + place + ' | نوع: ' + type, code, fullName, '', 'در انتظار تایید', '');
+    _recordRowChange(permitNo, 'ایجاد پرمیت', '', 'شماره ' + permitNo + ' | ' + place + ' | ' + type, code, fullName, '', 'CREATE_PERMIT');
+    syncPermitsToSecondarySheet();
+
+    return _json({
+      ok: true,
+      permitNo: permitNo,
+      row: newRowIndex,
+      status: 'در انتظار تایید',
+      message: '✓ پرمیت شماره ' + permitNo + ' با موفقیت ثبت شد و در شیت ذخیره گردید. (وضعیت: در انتظار تایید)'
+    }, cb, embedMsgId);
+  } finally {
+    try { lock.releaseLock(); } catch (eRel) {}
+  }
+}
+
+/** محاسبه شماره پرمیت بعدی (برای نمایش در فرم ثبت) */
+function _nextPermitNo() {
+  try {
+    var sh = _permitSheet();
+    var values = sh.getDataRange().getDisplayValues();
+    var colPermitNo = 12;
+    for (var hIdx = 0; hIdx < Math.min(values.length, 5); hIdx++) {
+      var rT = values[hIdx].map(function(c) { return String(c || '').trim().toLowerCase(); });
+      if (_isHeaderOrPlaceholderRow(rT)) {
+        rT.forEach(function(h, idx) {
+          if (/شماره\s*پرمیت|^پرمیت$/i.test(h)) colPermitNo = idx;
+        });
+        break;
+      }
+    }
+    var maxNo = 0;
+    for (var i = 1; i < values.length; i++) {
+      var pn = String(values[i][colPermitNo] || '').trim().replace(/\D/g, '');
+      var n = parseInt(pn, 10);
+      if (!isNaN(n) && n > maxNo) maxNo = n;
+    }
+    return String(maxNo + 1);
+  } catch (e) {
+    return '1';
+  }
+}
+
+// -------------------- Admin Permit Deletion & Dynamic Units Management --------------------
+
+function handleDeletePermit(body, cb, embedMsgId) {
+  var authRes = _authenticate(body.code || body.actorCode || body.adminCode);
+  if (!authRes.user) return _json({ ok: false, error: authRes.error }, cb, embedMsgId);
+  var u = authRes.user;
+  // v16: مجوز تکی «حذف دائم پرمیت» (مدیر ارشد همیشه مجاز است)
+  if (!_userHasPerm(u, 'delete')) return _denyPerm('delete', cb, embedMsgId);
+
+  var permitNo = String(body.permitNo || "").trim();
+  var reason = String(body.reason || "حذف توسط مدیر").trim();
+  if (!permitNo) return _json({ ok: false, error: "شماره پرمیت الزامی است." }, cb, embedMsgId);
+
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+  } catch (eLock) {
+    return _json({ ok: false, error: 'سرور در حال حاضر مشغول است. لطفاً دوباره تلاش کنید.' }, cb, embedMsgId);
+  }
+  try {
+    var sh = _permitSheet();
+    var values = sh.getDataRange().getDisplayValues();
+    var colPermitNo = 12;
+    for (var hIdx = 0; hIdx < Math.min(values.length, 5); hIdx++) {
+      var rT = values[hIdx].map(function(c) { return String(c || '').trim().toLowerCase(); });
+      if (_isHeaderOrPlaceholderRow(rT)) {
+        rT.forEach(function(h, idx) {
+          if (/شماره\s*پرمیت|^پرمیت$/i.test(h)) colPermitNo = idx;
+        });
+        break;
+      }
+    }
+    var foundRow = -1;
+    var deletedRowData = null;
+    for (var i = 1; i < values.length; i++) {
+      if (String(values[i][colPermitNo]).trim() === permitNo) {
+        foundRow = i + 1;
+        deletedRowData = values[i];
+        break;
+      }
+    }
+    if (foundRow === -1) {
+      return _json({ ok: false, error: "پرمیت شماره " + permitNo + " یافت نشد." }, cb, embedMsgId);
+    }
+    // ثبت در شیت حسابرسی قبل از حذف کامل جهت امنیت حسابرسی
+    try {
+      _tryAudit("DELETE_PERMIT", "حذف پرمیت شماره " + permitNo + " (دلیل: " + reason + ")", u.code, ((u.firstName || '') + ' ' + (u.lastName || '')).trim(), JSON.stringify(deletedRowData), "DELETED", reason);
+    } catch(errAudit) {}
+    // حذف واقعی ردیف از شیت پرمیت
+    sh.deleteRow(foundRow);
+    // پاک‌سازی کش
+    try { rebuildPermitCache(); } catch(e) {}
+    return _json({ ok: true, message: "✓ پرمیت شماره " + permitNo + " با موفقیت حذف شد و در لاگ حسابرسی ثبت گردید.", permitNo: permitNo }, cb, embedMsgId);
+  } catch (e) {
+    return _json({ ok: false, error: "خطا در حذف پرمیت: " + String(e) }, cb, embedMsgId);
+  } finally {
+    try { lock.releaseLock(); } catch(eRel) {}
+  }
+}
+
+var DEFAULT_INTERNAL_UNITS = [
+  'تولید', 'دیواترینگ/آبگیری', 'سنگ‌شکن', 'مکانیک', 'برق', 'ساخت/کارگاه ساخت',
+  'دفتر فنی', 'انبار', 'واحد خدمات', 'اداری و مالی', 'ماشین‌آلات', 'سایر'
+];
+
+var DEFAULT_CONTRACTORS = [
+  'زرین صنعت', 'رسم آرا', 'نبکو/NEPCO', 'آرسس توان پایا', 'سازه سبک ایرانیان',
+  'الکترو کویر', 'پیمانکاری جلال مرادی', 'سایر'
+];
+
+function _getUnitsSettingsSheet() {
+  var ss = _ss();
+  var sh = ss.getSheetByName('تنظیمات_واحدها');
+  if (!sh) {
+    sh = ss.insertSheet('تنظیمات_واحدها');
+    sh.appendRow(['نوع (واحد/پیمانکار)', 'نام گزینه', 'وضعیت', 'تاریخ ایجاد']);
+    sh.getRange('A1:D1').setFontWeight('bold').setBackground('#1e3c5c').setFontColor('#ffffff');
+    DEFAULT_INTERNAL_UNITS.forEach(function(u) {
+      if (u !== 'سایر') sh.appendRow(['واحد داخلی', u, 'فعال', _now()]);
+    });
+    DEFAULT_CONTRACTORS.forEach(function(c) {
+      if (c !== 'سایر') sh.appendRow(['پیمانکار', c, 'فعال', _now()]);
+    });
+  }
+  return sh;
+}
+
+function handleGetUnitsSettings(body, cb, embedMsgId) {
+  try {
+    var sh = _getUnitsSettingsSheet();
+    var values = sh.getDataRange().getDisplayValues();
+    var units = [];
+    var contractors = [];
+    for (var i = 1; i < values.length; i++) {
+      var type = String(values[i][0] || '').trim();
+      var name = String(values[i][1] || '').trim();
+      var status = String(values[i][2] || 'فعال').trim();
+      if (status === 'فعال' && name) {
+        if (type === 'واحد داخلی' || type === 'unit') {
+          if (units.indexOf(name) === -1) units.push(name);
+        } else if (type === 'پیمانکار' || type === 'contractor') {
+          if (contractors.indexOf(name) === -1) contractors.push(name);
+        }
+      }
+    }
+    if (units.indexOf('سایر') === -1) units.push('سایر');
+    if (contractors.indexOf('سایر') === -1) contractors.push('سایر');
+    return _json({ ok: true, units: units, contractors: contractors }, cb, embedMsgId);
+  } catch(e) {
+    return _json({ ok: true, units: DEFAULT_INTERNAL_UNITS, contractors: DEFAULT_CONTRACTORS }, cb, embedMsgId);
+  }
+}
+
+function handleSaveUnitsSettings(body, cb, embedMsgId) {
+  var authRes = _authenticate(body.code || body.actorCode || body.adminCode);
+  if (!authRes.user) return _json({ ok: false, error: authRes.error }, cb, embedMsgId);
+  var u = authRes.user;
+  // v16: مجوز تکی «ویرایش واحدها و پیمانکاران» (مدیر ارشد همیشه مجاز است)
+  if (!_userHasPerm(u, 'units')) return _denyPerm('units', cb, embedMsgId);
+
+  var unitsList = body.units ? (typeof body.units === 'string' ? JSON.parse(body.units) : body.units) : null;
+  var contractorsList = body.contractors ? (typeof body.contractors === 'string' ? JSON.parse(body.contractors) : body.contractors) : null;
+
+  var sh = _getUnitsSettingsSheet();
+  sh.clearContents();
+  sh.appendRow(['نوع (واحد/پیمانکار)', 'نام گزینه', 'وضعیت', 'تاریخ ایجاد']);
+  sh.getRange('A1:D1').setFontWeight('bold').setBackground('#1e3c5c').setFontColor('#ffffff');
+  if (unitsList && unitsList.length) {
+    unitsList.forEach(function(item) {
+      if (item && item !== 'سایر') sh.appendRow(['واحد داخلی', item, 'فعال', _now()]);
+    });
+  } else {
+    DEFAULT_INTERNAL_UNITS.forEach(function(u2) {
+      if (u2 !== 'سایر') sh.appendRow(['واحد داخلی', u2, 'فعال', _now()]);
+    });
+  }
+  if (contractorsList && contractorsList.length) {
+    contractorsList.forEach(function(item) {
+      if (item && item !== 'سایر') sh.appendRow(['پیمانکار', item, 'فعال', _now()]);
+    });
+  } else {
+    DEFAULT_CONTRACTORS.forEach(function(c2) {
+      if (c2 !== 'سایر') sh.appendRow(['پیمانکار', c2, 'فعال', _now()]);
+    });
+  }
+  _tryAudit('UNITS_SETTINGS', 'ویرایش واحدها/پیمانکاران توسط ' + ((u.firstName || '') + ' ' + (u.lastName || '')).trim(), u.code, '', '', '', '');
+  return _json({ ok: true, message: "✓ تنظیمات واحدها و پیمانکاران با موفقیت در شیت ذخیره شد." }, cb, embedMsgId);
+}
+
+// -------------------- Login --------------------
+
+function _handleLogin(code, firstName, lastName, cb, embedMsgId) {
+  firstName = String(firstName || '').trim();
+  lastName = String(lastName || '').trim();
+  code = String(code || '').trim();
+  if (!/^\d{8}$/.test(code)) return _json({ ok: false, error: 'کد ورود باید ۸ رقم باشد' }, cb, embedMsgId);
+  if (!firstName || !lastName) return _json({ ok: false, error: 'نام و نام‌خانوادگی الزامی است' }, cb, embedMsgId);
+  if (!_ss().getSheetByName(USER_SHEET)) {
+    _doSetup(true);
+  }
+  var u = _findUser(code);
+  var sh = _userSheet();
+  var isNewUser = false;
+  if (!u) {
+    if (DEFAULT_CODES.indexOf(code) === -1) {
+      return _json({ ok: false, error: 'کد ۸ رقمی مجاز نیست' }, cb, embedMsgId);
+    }
+    // ردیف جدید با تعداد ورود ۰ ساخته می‌شود تا در ادامه با +۱ به «۱» برسد (رفع باگ شمارش اول)
+    var newRowU = [code, firstName, lastName, 'فعال', _now(), _now(), 0, '', ''];
+    for (var pz = 0; pz < USER_PERMS.length; pz++) newRowU.push('');
+    sh.appendRow(newRowU);
+    u = _findUser(code);
+    isNewUser = true;
+  }
+  if (!_isActiveStatus(u.status)) {
+    return _json({ ok: false, error: 'دسترسی این کد قطع گردیده است', active: false, revokedAt: u.revokedAt }, cb, embedMsgId);
+  }
+  // برای کاربر جدید تعداد ورود = ۰ (تا ۰+۱ = ۱ شود)؛ برای کاربر موجود از مقدار شیت خوانده می‌شود
+  var count = isNewUser ? 0 : parseInt(u.loginCount, 10);
+  if (isNaN(count)) count = 0;
+  var nowVal = _now();
+  sh.getRange(u.row, 2).setValue(firstName);
+  sh.getRange(u.row, 3).setValue(lastName);
+  sh.getRange(u.row, 5).setValue(nowVal);
+  sh.getRange(u.row, 6).setValue(nowVal);
+  sh.getRange(u.row, 7).setValue(count + 1);
+  _appendToSecondarySheet(USER_SHEET, [code, firstName, lastName, 'فعال', nowVal, nowVal, count + 1, '', 'ورود همگام‌شده']);
+  _tryAudit('LOGIN', 'ورود کاربر به سامانه', code, firstName + ' ' + lastName, '', '', '');
+  _captureIdentity(code, firstName, lastName);
+
+  // آبجکت کاربر با همه پرچم‌های can* (v16)
+  var meObj = _buildMe(u, code);
+  meObj.code = code;
+  meObj.firstName = firstName;
+  meObj.lastName = lastName;
+  meObj.status = 'فعال';
+  meObj.loginCount = count + 1;
+
+  return _json({
+    ok: true,
+    active: true,
+    user: meObj
+  }, cb, embedMsgId);
+}
+
+// -------------------- Photos & Patrol Visits --------------------
+
+function savePhotoToDrive(photoBase64, permitNo, inspectorName) {
+  if (!photoBase64 || typeof photoBase64 !== "string") return "";
+  try {
+    var matches = photoBase64.match(/^data:(image\/[a-zA-Z]+);base64,(.+)$/);
+    var mimeType = "image/jpeg";
+    var base64Data = photoBase64;
+    if (matches && matches.length === 3) {
+      mimeType = matches[1];
+      base64Data = matches[2];
+    } else {
+      base64Data = photoBase64.replace(/^data:image\/\w+;base64,/, "");
+    }
+    var decodedBlob = Utilities.newBlob(
+      Utilities.base64Decode(base64Data),
+      mimeType,
+      "PTW_" + (permitNo || "General") + "_" + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd_HHmmss") + ".jpg"
+    );
+    var folder;
+    var folders = DriveApp.getFoldersByName(DRIVE_FOLDER_NAME);
+    if (folders.hasNext()) {
+      folder = folders.next();
+    } else {
+      folder = DriveApp.createFolder(DRIVE_FOLDER_NAME);
+    }
+    var file = folder.createFile(decodedBlob);
+    try {
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (eShare) {}
+    var fileId = file.getId();
+    return "https://drive.google.com/uc?export=view&id=" + fileId;
+  } catch (err) {
+    Logger.log("Drive Error: " + err.toString());
+    return "";
+  }
+}
+
+function handleSavePatrolVisit(data, cb, embedMsgId) {
+  var authRes = _authenticate(data.inspectorCode || data.code);
+  if (!authRes.user) return _json({ ok: false, error: authRes.error }, cb, embedMsgId);
+  // v16: مجوز تکی «ثبت گشت HSE» (مدیر ارشد همیشه مجاز است)
+  if (!_userHasPerm(authRes.user, 'patrol')) return _denyPerm('patrol', cb, embedMsgId);
+
+  var permitNo = String(data.permitNo || "").trim();
+  var inspectorName = String(data.inspectorName || "").trim() || ((authRes.user.firstName || '') + ' ' + (authRes.user.lastName || '')).trim();
+  var inspectorCode = authRes.user.code;
+  var result = String(data.result || "مطابق").trim();
+  var scoreText = String(data.scoreText || "۰/۷").trim();
+  var notes = String(data.notes || "").trim();
+  var itemsText = String(data.itemsText || "").trim();
+  var place = String(data.place || "").trim();
+  var workType = String(data.workType || "").trim();
+  var contractor = String(data.contractor || "").trim();
+  var photoBase64 = data.photoBase64 || "";
+  var photosList = data.photosBase64 || data.photos || [];
+  if (typeof photosList === 'string') {
+    try { photosList = JSON.parse(photosList); } catch (eP) { photosList = photosList ? [photosList] : []; }
+  }
+  if (!photosList || !photosList.length) {
+    photosList = photoBase64 ? [photoBase64] : [];
+  }
+  if (photosList.length > 5) photosList = photosList.slice(0, 5);
+  var closePermitAlso = String(data.closePermitAlso || "").trim() === "true" || data.closePermitAlso === true;
+
+  // بستن هم‌زمان فقط در صورت داشتن مجوز «بستن دستی» مجاز است
+  if (closePermitAlso && !_userHasPerm(authRes.user, 'close')) {
+    closePermitAlso = false;
+  }
+
+  if (!permitNo || /^Column/i.test(permitNo)) {
+    return _json({ ok: false, error: "شماره پرمیت معتبر نیست." }, cb, embedMsgId);
+  }
+  if (/^Column/i.test(place)) place = "—";
+  if (/^Column/i.test(workType)) workType = "عملیاتی";
+  if (/^Column/i.test(contractor)) contractor = "—";
+
+  var allPermits = _permitRows();
+  for (var idx = 0; idx < allPermits.length; idx++) {
+    if (String(allPermits[idx].permitNo).trim() === permitNo) {
+      if (place === "—" || !place) place = allPermits[idx].place;
+      if (workType === "عملیاتی" || !workType) workType = allPermits[idx].type;
+      if (contractor === "—" || !contractor) contractor = allPermits[idx].contractor;
+      break;
+    }
+  }
+
+  var shV = setupVisitsSheet();
+  var nowStr = _now();
+  var visitId = "VIS-" + Date.now() + "-" + Math.floor(Math.random() * 1000);
+  var photoUrls = [];
+  for (var pi = 0; pi < photosList.length; pi++) {
+    var one = savePhotoToDrive(photosList[pi], permitNo, inspectorName);
+    if (one) photoUrls.push(one);
+  }
+  var photoUrl = photoUrls.join('|');
+
+  // v16.1: کد ۸ رقمی (= رمز ورود) دیگر در شیت بازدیدها ذخیره نمی‌شود؛ فقط نام بازدیدکننده ثبت می‌شود
+  var rowToAppend = [
+    nowStr, permitNo, place, workType, contractor,
+    result, scoreText, inspectorName, '',
+    notes, itemsText, visitId, photoUrl
+  ];
+  shV.appendRow(rowToAppend);
+  _appendToSecondarySheet(VISIT_SHEET, rowToAppend);
+  _tryAudit('PATROL_VISIT', 'ثبت گشت HSE برای پرمیت ' + permitNo + ' | نتیجه: ' + result + ' | چک‌لیست: ' + scoreText + (closePermitAlso ? ' | بستن هم‌زمان پرمیت' : ''), inspectorCode, inspectorName, '', '', visitId);
+
+  if (closePermitAlso) {
+    handleClosePermit({ permitNo: permitNo, closedByCode: inspectorCode, closedByName: inspectorName });
+  }
+
+  return _json({
+    ok: true,
+    savedToSheet: true,
+    visitId: visitId,
+    photoUrl: photoUrl,
+    closedPermit: closePermitAlso,
+    message: "✓ بازدید گشت HSE برای پرمیت شماره " + permitNo + " ثبت شد." + (closePermitAlso ? " (پرمیت نیز بسته شد)" : "")
+  }, cb, embedMsgId);
+}
+
+function handleGetVisits(data, callback, embedMsgId) {
+  // v16.1: احراز هویت اجباری — فقط کاربران لاگین‌شده می‌توانند تاریخچه بازدیدها را ببینند
+  var authRes = _authenticate(data.code || data.actorCode);
+  if (!authRes.user) return _json({ ok: false, error: 'برای مشاهده تاریخچه بازدیدها ابتدا باید وارد سامانه شوید.' }, callback, embedMsgId);
+  var ss = _ss();
+  var shV = ss.getSheetByName(VISIT_SHEET);
+  if (!shV) return _json({ ok: true, visits: [] }, callback, embedMsgId);
+  var values = shV.getDataRange().getDisplayValues();
+  if (values.length <= 1) return _json({ ok: true, visits: [] }, callback, embedMsgId);
+  var targetPermitNo = String(data.permitNo || "").trim();
+  var visits = [];
+  for (var i = 1; i < values.length; i++) {
+    var r = values[i];
+    var pNo = String(r[1] || "").trim();
+    if (!pNo || /^Column/i.test(pNo) || /^شماره/i.test(pNo)) continue;
+    if (targetPermitNo) {
+      var cleanPNo = pNo.replace(/\D/g, '');
+      var cleanTarget = targetPermitNo.replace(/\D/g, '');
+      var isMatch = (pNo === targetPermitNo) ||
+                    (cleanPNo && cleanTarget && cleanPNo === cleanTarget) ||
+                    (pNo.indexOf(targetPermitNo) !== -1) ||
+                    (targetPermitNo.indexOf(pNo) !== -1);
+      if (!isMatch) continue;
+    }
+    visits.push({
+      time: r[0] ? String(r[0]) : "",
+      permitNo: pNo,
+      place: r[2] ? String(r[2]) : "",
+      workType: r[3] ? String(r[3]) : "",
+      contractor: r[4] ? String(r[4]) : "",
+      result: r[5] ? String(r[5]) : "مطابق",
+      scoreText: r[6] ? String(r[6]) : "",
+      inspectorName: r[7] ? String(r[7]) : "",
+      inspectorCode: "", // v16.1: کد کاربری (رمز ورود) هرگز در پاسخ API بازگردانده نمی‌شود
+      notes: r[9] ? String(r[9]) : "",
+      itemsText: r[10] ? String(r[10]) : "",
+      visitId: r[11] ? String(r[11]) : "",
+      photoUrl: r[12] ? String(r[12]) : "",
+      photoUrls: r[12] ? String(r[12]).split('|').map(function(x){ return String(x||'').trim(); }).filter(Boolean) : []
+    });
+  }
+  visits.reverse();
+  return _json({ ok: true, visits: visits }, callback, embedMsgId);
+}
+
+// -------------------- Groq & Gemini AI Integration --------------------
+
+function analyzeWorkWithAI(workType, place, desc, unit) {
+  var props = PropertiesService.getScriptProperties();
+  var groqKey = props.getProperty("GROQ_API_KEY");
+  var groqModel = props.getProperty("GROQ_MODEL") || "llama-3.3-70b-versatile";
+  var geminiKey = props.getProperty("GEMINI_API_KEY");
+  var geminiModel = props.getProperty("GEMINI_MODEL") || "gemini-2.0-flash";
+  var customRules = _getCustomHSEKnowledge();
+
+  var promptText =
+    "تو مهندس ارشد HSE کارخانه فرآوری و تغلیظ سرب و روی به روش فلوتاسیون هستی.\n" +
+    "فعالیت جهت آنالیز ایمنی:\n" +
+    "- نوع کار: " + workType + "\n" +
+    "- محل کار: " + place + "\n" +
+    "- شرح کامل کار: " + desc + "\n" +
+    "- واحد: " + unit + "\n\n" +
+    (customRules ? "خلاصه دانش تخصصی فلوتاسیون:\n" + customRules + "\n\n" : "") +
+    "پاسخ را دقیقاً به فرمت JSON زیر بازگردان (بدون هیچ متن اضافی):\n" +
+    "{\n" +
+    '  "risk": "پرریسک" | "متوسط" | "کم‌ریسک",\n' +
+    '  "category": "نام دسته اصلی فعالیت فلوتاسیون",\n' +
+    '  "score": عدد بین ۰ تا ۱۰۰,\n' +
+    '  "hazards": "خلاصه ۳ خطر اصلی با تمرکز روی خطرات پنهان فرآوری سرب و روی (LOTO، پمپ اسلاری، غبار سرب P3، فضای بسته، اسید)",\n' +
+    '  "controls": "اقدامات کنترلی الزامی",\n' +
+    '  "checklist": "۳ چک‌لیست مهم بازرسی میدانی",\n' +
+    '  "ppe": "تجهیزات حفاظت فردی الزامی (PPE) متناسب با کار و محل (مثلاً ماسک P3، هارنس دو قلاب، دستکش ضد اسید، عینک)",\n' +
+    '  "permitsNeeded": "مجوزهای مکمل مورد نیاز",\n' +
+    '  "priority": "فوری" | "عادی"\n' +
+    "}";
+
+  if (groqKey) {
+    try {
+      var url = "https://api.groq.com/openai/v1/chat/completions";
+      var payload = {
+        model: groqModel,
+        messages: [
+          { role: "system", content: "You are an expert Lead-Zinc Flotation Plant HSE Engineer. Respond only with valid JSON." },
+          { role: "user", content: promptText }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.2
+      };
+      var options = {
+        method: "post",
+        contentType: "application/json",
+        headers: { "Authorization": "Bearer " + groqKey },
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: true
+      };
+      var resp = UrlFetchApp.fetch(url, options);
+      if (resp.getResponseCode() === 200) {
+        var json = JSON.parse(resp.getContentText());
+        var rawContent = json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content;
+        if (rawContent) {
+          var parsed = JSON.parse(rawContent);
+          parsed.source = "Groq AI (" + groqModel + ")";
+          return parsed;
+        }
+      }
+    } catch (eGroq) {}
+  }
+
+  if (geminiKey) {
+    try {
+      var urlGem = "https://generativelanguage.googleapis.com/v1beta/models/" + geminiModel + ":generateContent?key=" + geminiKey;
+      var payloadGem = {
+        contents: [{ parts: [{ text: promptText }] }],
+        generationConfig: { responseMimeType: "application/json" }
+      };
+      var optionsGem = {
+        method: "post",
+        contentType: "application/json",
+        payload: JSON.stringify(payloadGem),
+        muteHttpExceptions: true
+      };
+      var respGem = UrlFetchApp.fetch(urlGem, optionsGem);
+      if (respGem.getResponseCode() === 200) {
+        var jsonGem = JSON.parse(respGem.getContentText());
+        var rawOutput = jsonGem.candidates && jsonGem.candidates[0] && jsonGem.candidates[0].content &&
+          jsonGem.candidates[0].content.parts && jsonGem.candidates[0].content.parts[0] && jsonGem.candidates[0].content.parts[0].text;
+        if (rawOutput) {
+          var parsedGem = JSON.parse(rawOutput);
+          parsedGem.source = "Gemini AI (" + geminiModel + ")";
+          return parsedGem;
+        }
+      }
+    } catch (eGem) {}
+  }
+
+  return fallbackLeadZincRules(workType, place, desc, unit);
+}
+
+function testAIConnection() {
+  var res = analyzeWorkWithAI("غیرروتین", "دیواترینگ - سام پمپ", "تعویض فراز پمپ 02", "دیواترینگ");
+  SpreadsheetApp.getUi().alert("🧪 نتیجه تست AI فلوتاسیون:\n" + JSON.stringify(res, null, 2));
+}
+
+function fallbackLeadZincRules(workType, place, desc, unit) {
+  var text = (workType + " " + place + " " + desc + " " + unit).toLowerCase();
+  var isHigh = false;
+  var isMed = false;
+  var h = [];
+  var c = [];
+  if (/فراز|پمپ|لیفت|سنگین/i.test(text)) {
+    isHigh = true;
+    h.push("سقوط پمپ حین باربرداری با جرثقیل، برق‌گرفتگی LOTO، سقوط از ارتفاع");
+    c.push("تست اسلینگ/شکل جرثقیل، طناب مهار (Tag Line)، قطع برق MCC و قفل LOTO، هارنس دو قلاب");
+  }
+  if (/گرم|جوش|برش|سنگ‌زدن|fire|hot/i.test(text)) {
+    isHigh = true;
+    h.push("حریق و آسیب به نوارهای لاستیکی یا سلول‌های فلوتاسیون");
+    c.push("حداقل ۲ کپسول اطفاء حریق، پایش حریق (Fire Watch)، پتو نسوز محافظ نوارهای انتقال");
+  }
+  if (/بسته|تانک|مخزن|فلوتاسیون|تیکندر|سایلو|confined/i.test(text)) {
+    isHigh = true;
+    h.push("افت اکسیژن و مسمومیت با گازها/اسیدهای فلوتاسیون در مخازن");
+    c.push("پرمیت ورود به فضای بسته، گازسنجی مستمر O2/H2S، نگهبان بیرونی، ماسک ضد گاز");
+  }
+  if (/آسیا|بالمیل|خردکن|سنگ‌شکن/i.test(text)) {
+    isHigh = true;
+    h.push("گیر افتادن در تجهیزات دوار و استنشاق غبار سمی سرب و روی");
+    c.push("قفل LOTO الکتریکی ۵ مرحله‌ای، ماسک P3/FFP3 تاییدشده، تست Pull Cord طنابی");
+  }
+  var riskLevel = isHigh ? "پرریسک" : (isMed ? "متوسط" : "کم‌ریسک");
+  return {
+    risk: riskLevel,
+    category: isHigh ? "عملیات حیاتی کارخانه فلوتاسیون (باربرداری / LOTO / کار در ارتفاع)" : "عملیات عمومی فرآوری",
+    score: isHigh ? 85 : (isMed ? 60 : 30),
+    hazards: h.join(" • ") || "خطرات عمومی مکانیکی کارگاهی",
+    controls: c.join(" • ") || "استفاده از تجهیزات حفاظت فردی PPE",
+    checklist: "چک سلامت جرثقیل • قفل LOTO • ماسک P3 • نظارت سرپرست",
+    ppe: isHigh ? "ماسک P3/FFP3 تاییدشده • هارنس ایمنی دو قلاب • دستکش کار ضد اسید • عینک و شیلد صورت" : "کلاه ایمنی • کفش کار ایمنی • عینک محافظ • دستکش کار",
+    permitsNeeded: isHigh ? "مجوز کار گرم + مجوز باربرداری/جرثقیل + مجوز LOTO + ورود به فضای بسته" : "مجوز عمومی",
+    priority: isHigh ? "فوری" : "عادی",
+    source: "موتور تخصصی HSE فلوتاسیون سرب و روی"
+  };
+}
+
+function addAIHeaders() {
+  var shP = _permitSheet();
+  if (!shP) return;
+  var headers = [
+    "سطح ریسک AI", "دسته فعالیت", "امتیاز ریسک",
+    "خطرات اصلی", "اقدامات کنترلی الزامی", "چک‌لیست گشت میدانی",
+    "مجوزهای مکمل", "اولویت گشت", "زمان تحلیل", "منبع تحلیل"
+  ];
+  shP.getRange(1, 16, 1, headers.length).setValues([headers])
+    .setFontWeight("bold").setBackground("#0f766e").setFontColor("#ffffff");
+}
+
+function analyzeActiveRowWithAI() {
+  var shP = _permitSheet();
+  var row = shP.getActiveCell().getRow();
+  if (row <= 1) {
+    SpreadsheetApp.getUi().alert("لطفاً یک ردیف پرمیت را انتخاب کنید.");
+    return;
+  }
+  addAIHeaders();
+  var r = shP.getRange(row, 1, 1, 15).getDisplayValues()[0];
+  var res = analyzeWorkWithAI(r[4], r[3], r[5], r[6]);
+  var nowStr = _now();
+  shP.getRange(row, 16, 1, 10).setValues([[
+    res.risk, res.category, res.score, res.hazards,
+    res.controls, res.checklist, res.permitsNeeded,
+    res.priority, nowStr, res.source
+  ]]);
+  SpreadsheetApp.getUi().alert("✅ تحلیل AI انجام شد.");
+}
+
+function analyzeActivePermitsWithAI() {
+  var shP = _permitSheet();
+  if (!shP) return;
+  var values = shP.getDataRange().getDisplayValues();
+  if (values.length <= 1) return;
+  addAIHeaders();
+  var count = 0;
+  for (var i = 1; i < values.length; i++) {
+    var status = String(values[i][14] || "فعال").trim();
+    if (status === "فعال" || status === "باز" || !status) {
+      var res = analyzeWorkWithAI(values[i][4], values[i][3], values[i][5], values[i][6]);
+      var nowStr = _now();
+      shP.getRange(i + 1, 16, 1, 10).setValues([[
+        res.risk, res.category, res.score, res.hazards,
+        res.controls, res.checklist, res.permitsNeeded,
+        res.priority, nowStr, res.source
+      ]]);
+      count++;
+    }
+  }
+  SpreadsheetApp.getUi().alert("✅ تعداد " + count + " پرمیت فعال تحلیل شد.");
+}
+
+// -------------------- Fix Date Columns (Anti-April) --------------------
+
+function menuFixDateColumns() {
+  var ui = SpreadsheetApp.getUi();
+  try {
+    var sh = _permitSheet();
+    var values = sh.getDataRange().getDisplayValues();
+    var colStartD = 1, colEndD = 7;
+    for (var hIdx = 0; hIdx < Math.min(values.length, 5); hIdx++) {
+      var rT = values[hIdx].map(function(c) { return String(c || '').trim().toLowerCase(); });
+      rT.forEach(function(h, idx) {
+        if (/تاریخ\s*شروع/i.test(h)) colStartD = idx;
+        else if (/تاریخ\s*اتمام/i.test(h)) colEndD = idx;
+      });
+    }
+    var maxRow = sh.getLastRow();
+    if (maxRow > 1) {
+      sh.getRange(2, colStartD + 1, maxRow - 1, 1).setNumberFormat('[$-fa-IR,16]yyyy/mm/dd');
+      sh.getRange(2, colEndD + 1, maxRow - 1, 1).setNumberFormat('[$-fa-IR,16]yyyy/mm/dd');
+      var rangeStart = sh.getRange(2, colStartD + 1, maxRow - 1, 1);
+      var rangeEnd = sh.getRange(2, colEndD + 1, maxRow - 1, 1);
+      var startVals = rangeStart.getValues();
+      var endVals = rangeEnd.getValues();
+      for (var i = 0; i < startVals.length; i++) {
+        var sd = String(startVals[i][0] || '').trim();
+        var ed = String(endVals[i][0] || '').trim();
+        if (/april|2026|1899/i.test(sd) || sd.length > 15) {
+          startVals[i][0] = '';
+        } else if (sd) {
+          startVals[i][0] = _cleanDateStr(sd);
+        }
+        if (/april|2026|1899/i.test(ed) || ed.length > 15) {
+          endVals[i][0] = '';
+        } else if (ed) {
+          endVals[i][0] = _cleanDateStr(ed);
+        }
+      }
+      rangeStart.setValues(startVals);
+      rangeEnd.setValues(endVals);
+    }
+    ui.alert('✅ انجام شد', 'ستون‌های تاریخ قفل شدند و فرمت آن‌ها به متن ساده (Plain Text) تغییر یافت تا گوگل‌شیت آن‌ها را به میلادی/آپریل تبدیل نکند.', ui.ButtonSet.OK);
+  } catch (err) {
+    ui.alert('❌ خطا', String(err), ui.ButtonSet.OK);
+  }
+}
+
+// -------------------- Shamsi Sidebar --------------------
+
+function openShamsiSidebar() {
+  var htmlContent = '<!DOCTYPE html><html><head><base target="_top"><meta charset="utf-8"><style>' +
+    'body { font-family: Tahoma, sans-serif; padding: 12px; direction: rtl; background: #f8fafc; color: #0f172a; font-size: 13px; }' +
+    '.btn { background: #f97316; color: white; border: none; padding: 9px 12px; border-radius: 8px; cursor: pointer; width: 100%; font-weight: bold; margin-bottom: 8px; font-family: inherit; font-size: 0.85rem; }' +
+    '.btn:hover { background: #ea580c; }' +
+    '.btn-sec { background: #e2e8f0; color: #0f172a; }' +
+    '.btn-sec:hover { background: #cbd5e1; }' +
+    'input { width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 8px; margin-bottom: 10px; box-sizing: border-box; font-family: inherit; font-size: 0.9rem; text-align: center; }' +
+    '.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 10px; }' +
+    'label { font-weight: bold; display: block; margin-bottom: 4px; font-size: 0.78rem; color: #334155; }' +
+    '</style></head><body>' +
+    '<h3 style="margin-top:0; color:#f97316;">📅 تقویم شمسی پرمیت</h3>' +
+    '<p style="color: #64748b; font-size: 11px; margin-bottom:12px;">تاریخ مورد نظر را انتخاب کنید و در سلول درج نمایید:</p>' +
+    '<div class="grid">' +
+    '<button class="btn btn-sec" onclick="setDate(\'1405/04/26\')">دیروز (۲۶)</button>' +
+    '<button class="btn btn-sec" onclick="setDate(\'1405/04/27\')" style="background:#ffedd5; color:#c2410c; font-weight:bold;">امروز (۲۷)</button>' +
+    '<button class="btn btn-sec" onclick="setDate(\'1405/04/28\')">فردا (۲۸)</button>' +
+    '<button class="btn btn-sec" onclick="setDate(\'1405/04/29\')">+۲ روز</button>' +
+    '<button class="btn btn-sec" onclick="setDate(\'1405/04/30\')">+۳ روز</button>' +
+    '<button class="btn btn-sec" onclick="setDate(\'1405/04/31\')">+۴ روز</button>' +
+    '</div>' +
+    '<label>تاریخ شمسی انتخابی:</label>' +
+    '<input type="text" id="customDate" value="1405/04/27">' +
+    '<button class="btn" onclick="insertDate()">📥 درج در سلول فعال شیت</button>' +
+    '<script>' +
+    'function setDate(d) { document.getElementById("customDate").value = d; }' +
+    'function insertDate() { var d = document.getElementById("customDate").value; google.script.run.insertDateToActiveCell(d); }' +
+    '</script></body></html>';
+  var html = HtmlService.createHtmlOutput(htmlContent)
+      .setTitle('تقویم شمسی پرمیت')
+      .setWidth(300);
+  SpreadsheetApp.getUi().showSidebar(html);
+}
+
+function insertDateToActiveCell(dateStr) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var cell = sheet.getActiveCell();
+  cell.setNumberFormat('[$-fa-IR,16]yyyy/mm/dd');
+  cell.setValue(dateStr);
+}
+
+// -------------------- Audit Log Engine (لاگ ضد دستکاری) --------------------
+
+/**
+ * ثبت لاگ عملکردها در شیت لاگ (جداگانه یا همین فایل)
+ * با زنجیره هش SHA-256: هر ردیف شامل هش ردیف قبلی + هش محتوای خودش است؛
+ * هر دستکاری در ردیف‌های قدیمی، زنجیره را می‌شکند و توسط verifyAuditChain شناسایی می‌شود.
+ * این تابع هرگز باعث شکست عملیات اصلی نمی‌شود (همه خطاها بلعیده می‌شوند).
+ */
+function _tryAudit(action, details, actorCode, actorName, beforeState, afterState, note) {
+  try {
+    var sh = _auditSheet();
+    var lastRow = sh.getLastRow();
+    var prevHash = '';
+    if (lastRow >= 2) {
+      prevHash = String(sh.getRange(lastRow, 9).getValue() || '').trim();
+    }
+    var rowData = [
+      _now(),
+      String(action || ''),
+      String(actorCode || ''),
+      String(actorName || ''),
+      String(details || ''),
+      String(beforeState || ''),
+      String(afterState || '')
+    ];
+    var content = prevHash + '|' + rowData.join('|');
+    var hash = _sha256hex(content);
+    sh.appendRow(rowData.concat([prevHash, hash, String(note || '')]));
+    _mirrorThrottled('لاگ_عملکرد', 3);
+  } catch (err) {
+    Logger.log('Audit error: ' + err.toString());
+  }
+}
+
+/** محاسبه هش SHA-256 به صورت رشته هگز */
+function _sha256hex(str) {
+  var raw = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(str), Utilities.Charset.UTF_8);
+  return raw.map(function(b) {
+    var v = (b < 0) ? b + 256 : b;
+    var h = v.toString(16);
+    return h.length === 1 ? '0' + h : h;
+  }).join('');
+}
+
+/** شیت لاگ (در شیت‌نامه لاگ جداگانه یا همین فایل) */
+function _auditSheet() {
+  var ss = _getAuditSpreadsheet();
+  var sh = ss.getSheetByName('لاگ_عملکرد');
+  if (!sh) {
+    sh = ss.insertSheet('لاگ_عملکرد');
+    sh.appendRow(['زمان', 'عملیات', 'کد کاربر', 'نام کاربر', 'جزئیات', 'وضعیت قبل', 'وضعیت بعد', 'هش قبلی', 'هش ردیف', 'یادداشت']);
+    sh.getRange(1, 1, 1, 10).setFontWeight('bold').setBackground('#7f1d1d').setFontColor('#ffffff');
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+/** شیت‌نامه لاگ: شیت جداگانه (AUDIT_SHEET_ID) یا همین فایل */
+function _getAuditSpreadsheet() {
+  var props = PropertiesService.getScriptProperties();
+  var id = props.getProperty('AUDIT_SHEET_ID') || '';
+  if (id) {
+    try { return SpreadsheetApp.openById(id); } catch (e) {}
+  }
+  return _ss();
+}
+
+/** منو: تنظیم شیت لاگ جداگانه (لینک/ID یا NEW برای ساخت خودکار) */
+function menuSetAuditSheet() {
+  var ui = SpreadsheetApp.getUi();
+  var response = ui.prompt(
+    '📜 تنظیم شیت لاگ عملکرد',
+    'لینک یا ID گوگل‌شیت لاگ را وارد کنید.\nبرای ساخت خودکار یک شیت جدید بنویسید: NEW\n(خالی = لاگ در شیت «لاگ_عملکرد» همین فایل)',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+  var input = String(response.getResponseText() || '').trim();
+  var props = PropertiesService.getScriptProperties();
+  if (!input) {
+    props.deleteProperty('AUDIT_SHEET_ID');
+    _auditSheet();
+    ui.alert('✅ انجام شد', 'لاگ روی شیت «لاگ_عملکرد» همین فایل فعال شد.', ui.ButtonSet.OK);
+    return;
+  }
+  if (input.toUpperCase() === 'NEW') {
+    try {
+      var newSS = SpreadsheetApp.create('لاگ عملکرد پرمیت HSE - ' + _gregorianToJalali(new Date()));
+      props.setProperty('AUDIT_SHEET_ID', newSS.getId());
+      _auditSheet();
+      ui.alert('✅ شیت لاگ جدید ساخته شد',
+        'یک گوگل‌شیت جدید ساخته شد:\n' + newSS.getUrl() +
+        '\n\n⚠️ برای جلوگیری از دستکاری، دسترسی ویرایش آن را فقط به افراد کاملاً مجاز بدهید و بقیه را Viewer کنید.',
+        ui.ButtonSet.OK);
+    } catch (e) {
+      ui.alert('❌ خطا در ساخت شیت لاگ', String(e), ui.ButtonSet.OK);
+    }
+    return;
+  }
+  var match = input.match(/\/d\/([a-zA-Z0-9-_]+)/);
+  var targetId = match ? match[1] : input;
+  try {
+    var ss2 = SpreadsheetApp.openById(targetId);
+    props.setProperty('AUDIT_SHEET_ID', targetId);
+    _auditSheet();
+    ui.alert('✅ انجام شد', 'لاگ روی شیت جدید فعال شد.', ui.ButtonSet.OK);
+  } catch (e2) {
+    ui.alert('❌ خطا در باز کردن شیت لاگ', String(e2), ui.ButtonSet.OK);
+  }
+}
+
+/** منو: بررسی صحت زنجیره هش لاگ — دستکاری ردیف‌های قدیمی را شناسایی می‌کند */
+function verifyAuditChain() {
+  var ui = SpreadsheetApp.getUi();
+  try {
+    var sh = _auditSheet();
+    var vals = sh.getDataRange().getDisplayValues();
+    if (vals.length <= 1) {
+      ui.alert('🔍 بررسی زنجیره لاگ', 'لاگ هنوز خالی است.', ui.ButtonSet.OK);
+      return;
+    }
+    var prevStored = '';
+    var broken = [];
+    for (var i = 1; i < vals.length; i++) {
+      var r = vals[i];
+      var storedPrev = String(r[7] || '').trim();
+      var storedHash = String(r[8] || '').trim();
+      // ۱) بررسی پیوند زنجیره: هش قبلی این ردیف باید با هش ردیف قبل یکی باشد
+      if (prevStored && storedPrev !== prevStored) {
+        broken.push('ردیف ' + (i + 1) + ' (شکستن زنجیره)');
+      }
+      // ۲) بررسی صحت هش محتوا
+      var expected = _sha256hex(storedPrev + '|' + [r[0], r[1], r[2], r[3], r[4], r[5], r[6]].join('|'));
+      if (storedHash && storedHash !== expected) {
+        broken.push('ردیف ' + (i + 1) + ' (دستکاری محتوا)');
+      }
+      prevStored = storedHash;
+    }
+    if (broken.length) {
+      ui.alert('⚠️ دستکاری شناسایی شد', 'در ' + broken.length + ' ردیف:\n' + broken.slice(0, 20).join('\n'), ui.ButtonSet.OK);
+    } else {
+      ui.alert('✅ زنجیره لاگ سالم است', 'همه ' + (vals.length - 1) + ' ردیف لاگ بدون دستکاری هستند.', ui.ButtonSet.OK);
+    }
+  } catch (err) {
+    ui.alert('❌ خطا در بررسی', String(err), ui.ButtonSet.OK);
+  }
+}
+
+/** نصب تریگرهای ناظر تغییرات دستی (onEdit + onChange) + ساخت کش */
+function setupAuditTriggers() {
+  var ui = SpreadsheetApp.getUi();
+  try {
+    var triggers = ScriptApp.getProjectTriggers();
+    for (var i = 0; i < triggers.length; i++) {
+      var hf = triggers[i].getHandlerFunction();
+      if (hf === 'auditOnEdit' || hf === 'auditOnChange') {
+        ScriptApp.deleteTrigger(triggers[i]);
+      }
+    }
+    ScriptApp.newTrigger('auditOnEdit').forSpreadsheet(_ss()).onEdit().create();
+    ScriptApp.newTrigger('auditOnChange').forSpreadsheet(_ss()).onChange().create();
+    rebuildPermitCache();
+    ui.alert('✅ نصب شد', 'ناظر تغییرات دستی فعال شد.\nهر ویرایش/حذف دستی در شیت «پرمیت» و «کاربران» لاگ می‌شود.', ui.ButtonSet.OK);
+  } catch (err) {
+    ui.alert('❌ خطا در نصب', String(err), ui.ButtonSet.OK);
+  }
+}
+
+/** onEdit: ثبت ویرایش/حذف دستی در شیت پرمیت و کاربران */
+function auditOnEdit(e) {
+  try {
+    if (!e || !e.range) return;
+    var range = e.range;
+    var sh = range.getSheet();
+    var sName = sh.getName();
+    if (sName !== PERMIT_SHEET && sName !== USER_SHEET) return;
+    var row = range.getRow();
+    var col = range.getColumn();
+    if (row <= 1) return;
+    var newVal = String(range.getValue() || '').trim();
+    var oldVal = (sName === PERMIT_SHEET) ? _cacheGet(row, col) : '';
+    // ۱) شناسایی کاربر ویرایشگر:
+    //    - e.user فقط برای مالک/اجراکننده پر است
+    //    - برای کاربران مشترک، کلید موقت (TemporaryActiveUserKey) که هنگام ورود به اپ ثبت شده،
+    //      با جدول «شناسه_کاربران» تطبیق داده می‌شود تا کد/نام/ایمیل او مشخص شود
+    var actorName = String(e.user || '').trim();
+    var actorEmail = actorName;
+    var actorCode = '';
+    var ident = _lookupIdentity();
+    if (!actorName && ident) {
+      actorName = ((ident.firstName || '') + ' ' + (ident.lastName || '')).trim() || ident.email || 'کاربر اپ';
+      actorCode = ident.code;
+      actorEmail = ident.email;
+    }
+    if (!actorName) actorName = 'ناشناس (بدون ورود به اپ)';
+
+    // ۲) تشخیص نوع عمل
+    var action = 'MANUAL_EDIT';
+    var details = 'ویرایش دستی | شیت: ' + sName + ' | ردیف: ' + row + ' | ستون: ' + col;
+    if (sName === PERMIT_SHEET) {
+      var valsRow = sh.getRange(row, 1, 1, 26).getDisplayValues()[0];
+      var permitNo = String(valsRow[12] || '').trim();
+      var isEmptyRow = true;
+      for (var k = 0; k < valsRow.length; k++) {
+        if (String(valsRow[k] || '').trim() !== '') { isEmptyRow = false; break; }
+      }
+      var wasInCache = _cacheHasRow(row);
+      if (!wasInCache) {
+        // ردیفی که قبلاً در کش نبوده → افزودن پرمیت/ردیف جدید
+        action = 'MANUAL_ADD';
+        details = 'افزودن پرمیت/ردیف جدید | شیت: ' + sName + ' | ردیف: ' + row + (permitNo ? ' | پرمیت: ' + permitNo : '');
+      } else if (isEmptyRow && oldVal) {
+        action = 'MANUAL_CLEAR';
+        details = 'خالی کردن ردیف ' + row + (permitNo ? ' | پرمیت: ' + permitNo : '') + ' | شیت: ' + sName;
+      } else if (col === 15) {
+        action = 'MANUAL_STATUS';
+        details = 'تغییر وضعیت پرمیت ' + (permitNo || '?') + ' | شیت: ' + sName;
+      } else if (col === 2 || col === 3 || col === 8 || col === 9) {
+        action = 'MANUAL_DATE';
+        details = 'تغییر تاریخ/زمان پرمیت ' + (permitNo || '?') + ' | شیت: ' + sName;
+      } else {
+        details = 'ویرایش سلول پرمیت ' + (permitNo || '?') + ' | ستون: ' + col + ' | شیت: ' + sName;
+      }
+    }
+    _tryAudit(action, details, actorCode, actorName, oldVal, newVal, actorEmail);
+
+    // ثبت در «تاریخچه تغییرات» شیت دوم (نمایش: مقدار قبل - توسط کسی - مقدار بعد)
+    var histField = '';
+    var histPermit = '';
+    try { histPermit = String(permitNo || '').trim(); } catch (eHP) {}
+    try { histField = String(sh.getRange(1, col).getValue() || '').trim(); } catch (eHF) {}
+    if (sName === USER_SHEET) {
+      histField = 'کاربران: ' + histField;
+      if (!histPermit) histPermit = String(newVal || oldVal || '');
+    }
+    if (action === 'MANUAL_CLEAR') histField = 'کل ردیف';
+    _recordRowChange(histPermit, histField, oldVal, newVal, actorCode, actorName, actorEmail, action);
+
+    if (sName === PERMIT_SHEET) {
+      _cacheSet(row, col, newVal);
+      _mirrorThrottled(PERMIT_SHEET);
+    } else if (sName === USER_SHEET) {
+      _mirrorThrottled(USER_SHEET);
+    }
+  } catch (err) {
+    Logger.log('auditOnEdit: ' + err.toString());
+  }
+}
+
+/** آیا ردیف موردنظر از قبل در کش وجود دارد؟ */
+function _cacheHasRow(row) {
+  var rows = _cacheRows();
+  for (var i = 0; i < rows.length; i++) {
+    if (String(rows[i][1]) === String(row)) return true;
+  }
+  return false;
+}
+
+/** onChange: ثبت تغییرات ساختاری (حذف/افزودن ردیف یا ستون) + بررسی پرمیت‌های حذف‌شده */
+function auditOnChange(e) {
+  try {
+    if (!e || !e.changeType) return;
+    var sName = '';
+    try { sName = e.source.getActiveSheet().getName(); } catch (errS) {}
+    if (sName && sName !== PERMIT_SHEET && sName !== USER_SHEET) return;
+    // شناسایی کاربر (از طریق کلید موقت ثبت‌شده هنگام ورود به اپ)
+    var actorName = '', actorCode = '', actorEmail = '';
+    var ident = _lookupIdentity();
+    if (ident) {
+      actorName = ((ident.firstName || '') + ' ' + (ident.lastName || '')).trim() || ident.email || 'کاربر اپ';
+      actorCode = ident.code;
+      actorEmail = ident.email;
+    }
+    if (!actorName) actorName = 'ناشناس';
+    var typeLabels = {
+      INSERT_ROW: 'افزودن ردیف',
+      REMOVE_ROW: 'حذف ردیف',
+      INSERT_COLUMN: 'افزودن ستون',
+      REMOVE_COLUMN: 'حذف ستون',
+      EDIT: 'ویرایش',
+      INSERT_GRID: 'افزودن شیت',
+      REMOVE_GRID: 'حذف شیت',
+      OTHER: 'سایر'
+    };
+    _tryAudit('STRUCT_CHANGE', 'تغییر ساختاری: ' + (typeLabels[e.changeType] || e.changeType) + ' | شیت: ' + (sName || '?'), actorCode, actorName, '', '', actorEmail);
+    if (e.changeType === 'REMOVE_ROW' || e.changeType === 'INSERT_ROW') {
+      detectDeletedPermits();
+    }
+    // تغییر ساختاری → همه شیت‌ها را در شیت دوم آینه کن
+    _syncAllVisibleToSecondary();
+  } catch (err) {
+    Logger.log('auditOnChange: ' + err.toString());
+  }
+}
+
+// -------------------- Identity Mapping (شناسایی کاربر ویرایشگر شیت) --------------------
+
+/**
+ * شیت مخفی «شناسه_کاربران»: نگاشت کلید موقت کاربر (TemporaryActiveUserKey) به کد/نام/ایمیل او.
+ * گوگل ایمیل ویرایشگر را برای کاربران مشترک در onEdit نمی‌دهد؛ اما کلید موقت در دسترس است.
+ * هر بار ورود/فعالیت کاربر در اپ HTML، کلید او در این جدول ثبت/به‌روز می‌شود و در ویرایش‌های
+ * دستی شیت با آن تطبیق داده می‌شود تا «چه کسی» تغییر را انجام داده مشخص شود.
+ */
+function _identitySheet() {
+  var ss = _ss();
+  var sh = ss.getSheetByName('شناسه_کاربران');
+  if (!sh) {
+    sh = ss.insertSheet('شناسه_کاربران');
+    sh.hideSheet();
+    sh.appendRow(['کلید موقت', 'کد', 'نام', 'نام خانوادگی', 'ایمیل', 'آخرین شناسایی']);
+    sh.getRange(1, 1, 1, 6).setFontWeight('bold');
+  }
+  return sh;
+}
+
+/** ثبت/به‌روزرسانی هویت کاربر (هنگام ورود یا هر تماس با اپ) */
+function _captureIdentity(code, firstName, lastName) {
+  try {
+    var key = Session.getTemporaryActiveUserKey();
+    if (!key) return;
+    var sh = _identitySheet();
+    var vals = sh.getDataRange().getDisplayValues();
+    var email = '';
+    try { email = String(Session.getActiveUser().getEmail() || ''); } catch (e2) {}
+    var nowStr = _now();
+    for (var i = 1; i < vals.length; i++) {
+      if (String(vals[i][0]) === key) {
+        sh.getRange(i + 1, 2, 1, 5).setValues([[code, firstName, lastName, email, nowStr]]);
+        return;
+      }
+    }
+    sh.appendRow([key, code, firstName, lastName, email, nowStr]);
+  } catch (e) {}
+}
+
+/** یافتن هویت کاربر فعلی از روی کلید موقت */
+function _lookupIdentity() {
+  try {
+    var key = Session.getTemporaryActiveUserKey();
+    if (!key) return null;
+    var sh = _identitySheet();
+    var vals = sh.getDataRange().getDisplayValues();
+    for (var i = 1; i < vals.length; i++) {
+      if (String(vals[i][0]) === key) {
+        return {
+          code: String(vals[i][1] || ''),
+          firstName: String(vals[i][2] || ''),
+          lastName: String(vals[i][3] || ''),
+          email: String(vals[i][4] || '')
+        };
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
+function detectDeletedPermits() {
+  var found = [];
+  try {
+    var cacheRows = _cacheRows();
+    var sh = _permitSheet();
+    var vals = sh.getDataRange().getDisplayValues();
+    var currentNos = {};
+    for (var i = 1; i < vals.length; i++) {
+      var pn = String(vals[i][12] || '').trim();
+      if (pn && pn !== 'شماره پرمیت') currentNos[pn] = true;
+    }
+    for (var j = 0; j < cacheRows.length; j++) {
+      var cr = cacheRows[j];
+      if (String(cr[0]) !== PERMIT_SHEET) continue;
+      var pno = String(cr[14] || '').trim();
+      if (!pno || /^شماره|^Column/i.test(pno)) continue;
+      if (!currentNos[pno]) {
+        var rowVals = cr.slice(2, 28).join(' | ');
+        found.push(pno);
+        _tryAudit('PERMIT_DELETED', 'پرمیت ' + pno + ' از شیت حذف شده است (ردیف ' + cr[1] + ')', '', 'کاربر', rowVals.length > 300 ? rowVals.substring(0, 300) + '...' : rowVals, '', '');
+      }
+    }
+    if (found.length) rebuildPermitCache();
+  } catch (err) {
+    Logger.log('detectDeletedPermits: ' + err.toString());
+  }
+  var ui = null;
+  try { ui = SpreadsheetApp.getUi(); } catch (eUI) {}
+  if (ui) {
+    ui.alert('🔎 بررسی پرمیت‌های حذف‌شده',
+      found.length ? '⚠️ ' + found.length + ' پرمیت حذف‌شده شناسایی و در لاگ ثبت شد:\n' + found.join('، ')
+                    : '✅ هیچ پرمیت حذف‌شده‌ای یافت نشد.', ui.ButtonSet.OK);
+  }
+  return found;
+}
+
+/** شیت کش داخلی (مخفی) برای مقایسه قبل/بعد در onEdit */
+function _cacheSheet() {
+  var ss = _ss();
+  var sh = ss.getSheetByName('کش_لاگ_داخلی');
+  if (!sh) {
+    sh = ss.insertSheet('کش_لاگ_داخلی');
+    sh.hideSheet();
+    var header = ['شیت', 'ردیف'];
+    for (var c = 1; c <= 26; c++) header.push('ستون' + c);
+    sh.appendRow(header);
+  }
+  return sh;
+}
+
+function _cacheRows() {
+  try {
+    var sh = _cacheSheet();
+    var last = sh.getLastRow();
+    if (last < 2) return [];
+    return sh.getRange(2, 1, last - 1, 28).getDisplayValues();
+  } catch (e) { return []; }
+}
+
+function _cacheGet(row, col) {
+  var rows = _cacheRows();
+  for (var i = 0; i < rows.length; i++) {
+    if (String(rows[i][1]) === String(row)) {
+      return String(rows[i][col + 1] || '');
+    }
+  }
+  return '';
+}
+
+function _cacheSet(row, col, val) {
+  try {
+    var sh = _cacheSheet();
+    var rows = _cacheRows();
+    for (var i = 0; i < rows.length; i++) {
+      if (String(rows[i][1]) === String(row)) {
+        sh.getRange(i + 2, col + 2).setValue(val);
+        return;
+      }
+    }
+    var arr = [PERMIT_SHEET, row];
+    for (var c = 1; c <= 26; c++) arr.push('');
+    arr[col + 1] = val;
+    sh.appendRow(arr);
+  } catch (e) {}
+}
+
+/** بازسازی کامل کش از شیت پرمیت */
+function rebuildPermitCache() {
+  try {
+    var sh = _cacheSheet();
+    sh.clear();
+    var header = ['شیت', 'ردیف'];
+    for (var c = 1; c <= 26; c++) header.push('ستون' + c);
+    sh.appendRow(header);
+    var psh = _permitSheet();
+    var vals = psh.getDataRange().getDisplayValues();
+    for (var i = 0; i < vals.length; i++) {
+      var arr = [PERMIT_SHEET, i + 1];
+      for (var j = 0; j < 26; j++) arr.push(vals[i][j] != null ? String(vals[i][j]) : '');
+      sh.appendRow(arr);
+    }
+    sh.hideSheet();
+  } catch (err) {
+    Logger.log('rebuildPermitCache: ' + err.toString());
+  }
+}
+
+/** پشتیبان‌گیری فوری از شیت پرمیت (در شیت‌نامه لاگ یا همین فایل) */
+function backupPermitSheet() {
+  var ui = null;
+  try { ui = SpreadsheetApp.getUi(); } catch (eUI) {}
+  try {
+    var src = _permitSheet();
+    var vals = src.getDataRange().getDisplayValues();
+    if (!vals || vals.length === 0) {
+      if (ui) ui.alert('💾 پشتیبان', 'شیت پرمیت خالی است.', ui.ButtonSet.OK);
+      return 0;
+    }
+    var targetSS = _getAuditSpreadsheet() || _ss();
+    var todayJ = _gregorianToJalali(new Date()).replace(/\//g, '');
+    var bName = 'بایگانی_' + todayJ;
+    var bsh = targetSS.getSheetByName(bName);
+    if (!bsh) bsh = targetSS.insertSheet(bName);
+    bsh.clear();
+    bsh.getRange(1, 1, vals.length, vals[0].length).setValues(vals);
+    bsh.getRange(1, 1, 1, vals[0].length).setBackground('#7c2d12').setFontColor('#ffffff').setFontWeight('bold');
+    bsh.setFrozenRows(1);
+    _pruneBackups(targetSS, 30);
+    _tryAudit('BACKUP', 'پشتیبان‌گیری از شیت پرمیت (' + vals.length + ' ردیف)', '', '', '', '', bName);
+    if (ui) ui.alert('✅ پشتیبان گرفته شد', vals.length + ' ردیف در شیت «' + bName + '» ذخیره شد.', ui.ButtonSet.OK);
+    return vals.length;
+  } catch (err) {
+    Logger.log('backupPermitSheet: ' + err.toString());
+    if (ui) ui.alert('❌ خطا در پشتیبان', String(err), ui.ButtonSet.OK);
+    return 0;
+  }
+}
+
+/** حذف بایگانی‌های قدیمی (فقط ۳۰ نسخه آخر نگه داشته می‌شود) */
+function _pruneBackups(targetSS, max) {
+  try {
+    var sheets = targetSS.getSheets();
+    var backups = [];
+    for (var i = 0; i < sheets.length; i++) {
+      if (/^بایگانی_\d{8}$/.test(sheets[i].getName())) backups.push(sheets[i]);
+    }
+    backups.sort(function(a, b) { return a.getName() < b.getName() ? -1 : 1; });
+    while (backups.length > max) {
+      targetSS.deleteSheet(backups.shift());
+    }
+  } catch (e) {}
+}
+
+/** نصب تریگر پشتیبان‌گیری روزانه */
+function installDailyBackupTrigger() {
+  var ui = SpreadsheetApp.getUi();
+  try {
+    var triggers = ScriptApp.getProjectTriggers();
+    for (var i = 0; i < triggers.length; i++) {
+      if (triggers[i].getHandlerFunction() === 'backupPermitSheet') {
+        ScriptApp.deleteTrigger(triggers[i]);
+      }
+    }
+    ScriptApp.newTrigger('backupPermitSheet').timeBased().everyDays(1).atHour(0).create();
+    ui.alert('✅ نصب شد', 'پشتیبان‌گیری روزانه (ساعت ۰۰:۰۰) فعال شد.\nحداکثر ۳۰ نسخه اخیر نگه داشته می‌شود.', ui.ButtonSet.OK);
+  } catch (err) {
+    ui.alert('❌ خطا در نصب', String(err), ui.ButtonSet.OK);
+  }
+}
+
+// -------------------- Admin Panel (پنل مدیریت و لاگ) --------------------
+
+/** منو: تنظیم آدرس پنل مدیریت (برای نمایش در منو) */
+function menuSetAdminPanelUrl() {
+  var ui = SpreadsheetApp.getUi();
+  var props = PropertiesService.getScriptProperties();
+  var current = props.getProperty('ADMIN_PANEL_URL') || '';
+  var response = ui.prompt(
+    '🖥️ تنظیم آدرس پنل مدیریت',
+    'آدرس کامل فایل پنل مدیریت (admin-panel.html) را وارد کنید:\n(فعلی: ' + (current || '—') + ')',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+  var url = String(response.getResponseText() || '').trim();
+  if (url) props.setProperty('ADMIN_PANEL_URL', url);
+  else props.deleteProperty('ADMIN_PANEL_URL');
+  ui.alert('✅ ذخیره شد', 'آدرس پنل مدیریت: ' + (url || 'حذف شد'), ui.ButtonSet.OK);
+}
+
+/** خواندن ردیف‌های لاگ با فیلتر (فقط مدیر) */
+function handleAdminLogs(p, cb, embedMsgId) {
+  var code = String(p.code || '').trim();
+  if (!_requireAdmin(code)) return _json({ ok: false, error: 'فقط مدیر ارشد مجاز است.' }, cb, embedMsgId);
+  try {
+    var sh = _auditSheet();
+    var vals = sh.getDataRange().getDisplayValues();
+    var logs = [];
+    if (vals.length > 1) {
+      var filterAction = String(p.actionFilter || '').trim();
+      var q = String(p.q || '').trim().toLowerCase();
+      var todayOnly = String(p.today || '').trim() === '1';
+      var todayFa = _gregorianToJalali(new Date());
+      var limit = parseInt(p.limit || '500', 10);
+      if (isNaN(limit) || limit <= 0) limit = 500;
+      var startIdx = Math.max(1, vals.length - limit);
+      for (var i = startIdx; i < vals.length; i++) {
+        var r = vals[i];
+        if (!r[0]) continue;
+        if (filterAction && String(r[1] || '').trim() !== filterAction) continue;
+        if (todayOnly && String(r[0] || '').indexOf(todayFa) !== 0) continue;
+        if (q) {
+          var hay = (r.slice(0, 7).join(' ') + ' ').toLowerCase();
+          if (hay.indexOf(q) === -1) continue;
+        }
+        logs.push({
+          time: String(r[0] || ''),
+          action: String(r[1] || ''),
+          actorCode: String(r[2] || ''),
+          actorName: String(r[3] || ''),
+          details: String(r[4] || ''),
+          before: String(r[5] || ''),
+          after: String(r[6] || ''),
+          prevHash: String(r[7] || ''),
+          hash: String(r[8] || ''),
+          note: String(r[9] || '')
+        });
+      }
+    }
+    return _json({ ok: true, logs: logs, total: logs.length }, cb, embedMsgId);
+  } catch (err) {
+    return _json({ ok: false, error: String(err) }, cb, embedMsgId);
+  }
+}
+
+/** خواندن رکوردهای «تاریخچه تغییرات» با فیلتر (فقط مدیر) */
+function handleAdminHistory(p, cb, embedMsgId) {
+  var code = String(p.code || '').trim();
+  if (!_requireAdmin(code)) return _json({ ok: false, error: 'فقط مدیر ارشد مجاز است.' }, cb, embedMsgId);
+  try {
+    var sh = _historySheet();
+    var vals = sh.getDataRange().getDisplayValues();
+    var items = [];
+    if (vals.length > 1) {
+      var q = String(p.q || '').trim().toLowerCase();
+      var todayOnly = String(p.today || '').trim() === '1';
+      var todayFa = _gregorianToJalali(new Date());
+      var limit = parseInt(p.limit || '500', 10);
+      if (isNaN(limit) || limit <= 0) limit = 500;
+      var startIdx = Math.max(1, vals.length - limit);
+      for (var i = startIdx; i < vals.length; i++) {
+        var r = vals[i];
+        if (!r[0]) continue;
+        if (todayOnly && String(r[0] || '').indexOf(todayFa) !== 0) continue;
+        if (q) {
+          var hay = (r.slice(0, 9).join(' ') + ' ').toLowerCase();
+          if (hay.indexOf(q) === -1) continue;
+        }
+        items.push({
+          time: String(r[0] || ''),
+          permitNo: String(r[1] || ''),
+          field: String(r[2] || ''),
+          oldVal: String(r[3] || ''),
+          newVal: String(r[4] || ''),
+          by: String(r[5] || ''),
+          code: String(r[6] || ''),
+          email: String(r[7] || ''),
+          display: String(r[8] || ''),
+          action: String(r[9] || '')
+        });
+      }
+    }
+    return _json({ ok: true, items: items, total: items.length }, cb, embedMsgId);
+  } catch (err) {
+    return _json({ ok: false, error: String(err) }, cb, embedMsgId);
+  }
+}
+
+/** خروجی اکسل (CSV) از «تاریخچه تغییرات» (فقط مدیر) */
+function handleAdminHistoryExport(p, cb, embedMsgId) {
+  var code = String(p.code || '').trim();
+  if (!_requireAdmin(code)) return _json({ ok: false, error: 'فقط مدیر ارشد مجاز است.' }, cb, embedMsgId);
+  try {
+    var sh = _historySheet();
+    var vals = sh.getDataRange().getDisplayValues();
+    if (!vals.length) return _json({ ok: false, error: 'تاریخچه خالی است.' }, cb, embedMsgId);
+    var q = String(p.q || '').trim().toLowerCase();
+    var todayOnly = String(p.today || '').trim() === '1';
+    var todayFa = _gregorianToJalali(new Date());
+    var lines = [];
+    lines.push(['زمان', 'شماره پرمیت', 'فیلد تغییر', 'مقدار قبل', 'مقدار بعد', 'توسط', 'کد کاربر', 'ایمیل', 'نمایش تغییر', 'نوع عمل'].map(_csvCell).join(','));
+    for (var i = 1; i < vals.length; i++) {
+      var r = vals[i];
+      if (!r[0]) continue;
+      if (todayOnly && String(r[0] || '').indexOf(todayFa) !== 0) continue;
+      if (q) {
+        var hay = (r.slice(0, 9).join(' ') + ' ').toLowerCase();
+        if (hay.indexOf(q) === -1) continue;
+      }
+      lines.push(r.slice(0, 10).map(_csvCell).join(','));
+    }
+    var csv = '﻿' + lines.join('\r\n');
+    var fileName = 'تاریخچه_تغییرات_HSE_' + todayFa.replace(/\//g, '') + '_' + Date.now() + '.csv';
+    var blob = Utilities.newBlob(csv, 'text/csv', fileName);
+    var file = DriveApp.createFile(blob);
+    try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (eShare) {}
+    var dlUrl = 'https://drive.google.com/uc?export=download&id=' + file.getId();
+    return _json({ ok: true, fileUrl: dlUrl, fileName: fileName, rows: lines.length - 1 }, cb, embedMsgId);
+  } catch (err) {
+    return _json({ ok: false, error: String(err) }, cb, embedMsgId);
+  }
+}
+
+/** آمار لاگ‌ها (فقط مدیر) */
+function handleAdminStats(code, cb, embedMsgId) {
+  if (!_requireAdmin(code)) return _json({ ok: false, error: 'فقط مدیر ارشد مجاز است.' }, cb, embedMsgId);
+  try {
+    var sh = _auditSheet();
+    var vals = sh.getDataRange().getDisplayValues();
+    var stats = { total: 0, today: 0, byAction: {}, deletedCount: 0, autoCloseCount: 0, loginCount: 0 };
+    if (vals.length > 1) {
+      var todayFa = _gregorianToJalali(new Date());
+      for (var i = 1; i < vals.length; i++) {
+        var r = vals[i];
+        if (!r[0]) continue;
+        stats.total++;
+        var act = String(r[1] || '');
+        stats.byAction[act] = (stats.byAction[act] || 0) + 1;
+        if (act === 'PERMIT_DELETED') stats.deletedCount++;
+        if (act === 'CLOSE_AUTO') stats.autoCloseCount++;
+        if (act === 'LOGIN') stats.loginCount++;
+        if (String(r[0]).indexOf(todayFa) === 0) stats.today++;
+      }
+    }
+    return _json({ ok: true, stats: stats }, cb, embedMsgId);
+  } catch (err) {
+    return _json({ ok: false, error: String(err) }, cb, embedMsgId);
+  }
+}
+
+/** ساخت فایل CSV (سازگار با اکسل، با BOM) در Drive و برگرداندن لینک دانلود (فقط مدیر) */
+function handleAdminExport(p, cb, embedMsgId) {
+  var code = String(p.code || '').trim();
+  if (!_requireAdmin(code)) return _json({ ok: false, error: 'فقط مدیر ارشد مجاز است.' }, cb, embedMsgId);
+  try {
+    var sh = _auditSheet();
+    var vals = sh.getDataRange().getDisplayValues();
+    if (!vals.length) return _json({ ok: false, error: 'لاگ خالی است.' }, cb, embedMsgId);
+    // اعمال فیلترها (مثل handleAdminLogs)
+    var filterAction = String(p.actionFilter || '').trim();
+    var q = String(p.q || '').trim().toLowerCase();
+    var todayOnly = String(p.today || '').trim() === '1';
+    var todayFa = _gregorianToJalali(new Date());
+    var rowsOut = [];
+    for (var i = 1; i < vals.length; i++) {
+      var r = vals[i];
+      if (!r[0]) continue;
+      if (filterAction && String(r[1] || '').trim() !== filterAction) continue;
+      if (todayOnly && String(r[0] || '').indexOf(todayFa) !== 0) continue;
+      if (q) {
+        var hay = (r.slice(0, 7).join(' ') + ' ').toLowerCase();
+        if (hay.indexOf(q) === -1) continue;
+      }
+      rowsOut.push(r.slice(0, 10));
+    }
+    var lines = [];
+    // هدر با نام فارسی + BOM برای اکسل
+    lines.push(['زمان', 'عملیات', 'کد کاربر', 'نام کاربر', 'جزئیات', 'وضعیت قبل', 'وضعیت بعد', 'هش قبلی', 'هش ردیف', 'یادداشت'].map(_csvCell).join(','));
+    for (var j = 0; j < rowsOut.length; j++) {
+      lines.push(rowsOut[j].map(_csvCell).join(','));
+    }
+    var csv = '﻿' + lines.join('\r\n');
+    var fileName = 'گزارش_لاگ_HSE_' + todayFa.replace(/\//g, '') + '_' + Date.now() + '.csv';
+    var blob = Utilities.newBlob(csv, 'text/csv', fileName);
+    var file = DriveApp.createFile(blob);
+    try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (eShare) {}
+    // لینک دانلود مستقیم (غیر از پیش‌نمایش گوگل)
+    var dlUrl = 'https://drive.google.com/uc?export=download&id=' + file.getId();
+    return _json({ ok: true, fileUrl: dlUrl, fileName: fileName, rows: rowsOut.length, csvPreview: csv.substring(0, 200) }, cb, embedMsgId);
+  } catch (err) {
+    return _json({ ok: false, error: String(err) }, cb, embedMsgId);
+  }
+}
+
+/** سلول CSV: اگر شامل , " یا \n باشد، در نقل‌قول می‌رود و " دوبل می‌شود */
+function _csvCell(val) {
+  var s = String(val == null ? '' : val);
+  if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+/** فهرست بایگانی‌های پشتیبان (فقط مدیر) */
+function handleAdminBackups(code, cb, embedMsgId) {
+  if (!_requireAdmin(code)) return _json({ ok: false, error: 'فقط مدیر ارشد مجاز است.' }, cb, embedMsgId);
+  try {
+    var ss = _getAuditSpreadsheet() || _ss();
+    var sheets = ss.getSheets();
+    var backups = [];
+    for (var i = 0; i < sheets.length; i++) {
+      var nm = sheets[i].getName();
+      if (/^بایگانی_\d{8}$/.test(nm)) {
+        backups.push({ name: nm, rows: sheets[i].getLastRow() - 1 });
+      }
+    }
+    backups.sort(function(a, b) { return a.name < b.name ? 1 : -1; });
+    return _json({ ok: true, backups: backups }, cb, embedMsgId);
+  } catch (err) {
+    return _json({ ok: false, error: String(err) }, cb, embedMsgId);
+  }
+}
+
+// -------------------- v16.1: One-time security scrub --------------------
+
+/**
+ * پاک‌سازی یک‌باره کدهای بازدیدکننده از ستون I شیت «بازدیدها» (و شیت دوم در صورت فعال بودن).
+ * کد ۸ رقمی = رمز ورود کاربر است و نباید در شیت بازدیدها نگه داشته شود.
+ * این تابع را یک بار از منوی شیت اجرا کنید تا دیتای قبلی پاک شود؛ رکوردهای جدید خودشان بدون کد ثبت می‌شوند.
+ */
+function scrubVisitInspectorCodes() {
+  var ui = null;
+  try { ui = SpreadsheetApp.getUi(); } catch (eUI) {}
+  var totalCleared = 0;
+  function scrubSheet(sh) {
+    var last = sh.getLastRow();
+    if (last < 2) return 0;
+    var rng = sh.getRange(2, 9, last - 1, 1); // ستون I = کد بازدیدکننده
+    var vals = rng.getDisplayValues();
+    var n = 0;
+    for (var i = 0; i < vals.length; i++) {
+      var s = String(vals[i][0] || '').trim();
+      if (/^\d{8}$/.test(s)) { vals[i][0] = ''; n++; }
+    }
+    if (n > 0) rng.setValues(vals);
+    return n;
+  }
+  try {
+    var shV = _ss().getSheetByName(VISIT_SHEET);
+    if (shV) totalCleared += scrubSheet(shV);
+    var secSS = _getSecondarySpreadsheet();
+    if (secSS) {
+      var shV2 = secSS.getSheetByName(VISIT_SHEET);
+      if (shV2) totalCleared += scrubSheet(shV2);
+    }
+    _tryAudit('SCRUB_VISIT_CODES', 'پاک‌سازی ' + totalCleared + ' کد بازدیدکننده از شیت بازدیدها', '', 'سیستم', '', '', '');
+    if (ui) ui.alert('✅ پاک‌سازی انجام شد', totalCleared + ' کد بازدیدکننده از شیت «بازدیدها» حذف شد.\nاز این پس فقط نام بازدیدکننده ثبت می‌شود.', ui.ButtonSet.OK);
+  } catch (err) {
+    if (ui) ui.alert('❌ خطا در پاک‌سازی', String(err), ui.ButtonSet.OK);
+  }
+  return totalCleared;
+}
