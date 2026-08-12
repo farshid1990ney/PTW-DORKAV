@@ -470,7 +470,6 @@
         <span>❌ پرمیت‌های رد شده (بازرسی مجدد)</span>
         <span class="item-badge" id="mRejectedCnt" style="background:#fee2e2;color:#991b1b">0</span>
       </div>
-      <div class="drawer-item admin-only" id="drawerAdminReactivate" style="display:none" onclick="openUsersModal();closeDrawer();">
       <div class="drawer-item admin-only" id="drawerCreatePermit" style="display:none;color:var(--success)" onclick="goCreatePage();closeDrawer();">
         <span>➕ ثبت پرمیت دستی</span>
         <span>جدید</span>
@@ -479,8 +478,17 @@
         <span>🖼️ لوگوی سامانه</span>
         <span>آپلود</span>
       </div>
+      <div class="drawer-item admin-only" onclick="toggleSuccessBeep();closeDrawer();">
+        <span>🔔 بیپ موفقیت (فقط گوشی عمل‌کننده)</span>
+        <span id="beepStateBadge">—</span>
+      </div>
+      <div class="drawer-item admin-only" id="drawerAdminReactivate" style="display:none" onclick="openUsersModal();closeDrawer();">
         <span>🔐 مجوزهای کاربران (تک‌تک)</span>
         <span>مدیر</span>
+      </div>
+      <div class="drawer-item admin-only" onclick="openHseCatalogModal();closeDrawer();">
+        <span>📘 انواع پرمیت، چک‌لیست و دانش HSE</span>
+        <span>ویرایش</span>
       </div>
       <div class="drawer-item admin-only" onclick="openTable();closeDrawer();">
         <span>📊 گزارش و جدول کل پرمیت‌ها</span>
@@ -1056,16 +1064,17 @@
 
       <!-- ۳. نوع کار -->
       <label style="margin-top:12px">۳. نوع کار *</label>
-      <div style="display:flex;gap:16px;margin-bottom:6px">
+      <div id="cpWorkTypeBox" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px">
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:700;color:var(--d)">
-          <input type="radio" name="cpWorkTypeRadio" value="روتین" checked onchange="updateLivePreview()" style="width:auto" />
+          <input type="radio" name="cpWorkTypeRadio" value="روتین" checked onchange="onWorkTypeChange()" style="width:auto" />
           روتین
         </label>
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:700;color:var(--d)">
-          <input type="radio" name="cpWorkTypeRadio" value="غیر روتین" onchange="updateLivePreview()" style="width:auto" />
+          <input type="radio" name="cpWorkTypeRadio" value="غیر روتین" onchange="onWorkTypeChange()" style="width:auto" />
           غیر روتین
         </label>
       </div>
+      <div id="cpWorkTypeWarn" class="hint" style="display:none;background:#fff7ed;border:1px solid #fdba74;border-radius:10px;padding:8px;color:#9a3412"></div>
 
       <!-- ۴. محل انجام کار پویا (Dynamic Cascading Dropdown) -->
       <label style="margin-top:12px">۴. محل انجام کار پویا *</label>
@@ -1162,6 +1171,23 @@
     </div>
   </div>
 
+  <div class="modal" id="hseCatalogModal">
+    <div class="panel" style="max-width:680px">
+      <h2>📘 انواع پرمیت، چک‌لیست و دانش HSE</h2>
+      <p class="hint">فقط مدیر. انواع کار در فرم ثبت، موارد چک‌لیست گشت، و متن دانش AI از اینجا عوض می‌شود — بدون دست‌کاری کد.</p>
+      <label>انواع پرمیت (هر خط: نام | متن هشدار | کلیدواژه)</label>
+      <textarea id="hseTypesText" rows="8" style="width:100%;font-size:0.8rem"></textarea>
+      <label>چک‌لیست گشت (هر مورد یک خط)</label>
+      <textarea id="hseCheckText" rows="7" style="width:100%;font-size:0.8rem"></textarea>
+      <label>دانش HSE (هر خط: موضوع | متن هشدار)</label>
+      <textarea id="hseKnowText" rows="8" style="width:100%;font-size:0.78rem"></textarea>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn btn-p" style="flex:2" onclick="saveHseCatalog()">💾 ذخیره در شیت</button>
+        <button class="btn btn-d" style="flex:1" onclick="closeHseCatalogModal()">انصراف</button>
+      </div>
+    </div>
+  </div>
+
   <!-- مدال تمدید یک‌روزه و بازفعال‌سازی پرمیت (نیازمند مجوز مدیر ارشد) -->
   <div class="modal" id="reactivateModal">
     <div class="panel">
@@ -1243,7 +1269,7 @@
       { key:'analyze',      flag:'hasAnalyze',      can:'canAnalyze',      icon:'🧠', label:'تحلیل هوش مصنوعی (AI)' },
       { key:'export',       flag:'hasExport',       can:'canExport',       icon:'📤', label:'خروجی اکسل تمام پرمیت‌ها' }
     ];
-    const APP_FILE_VERSION = 'v16.15-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل) — v16.2: فیکس تحلیل AI (ارسال code + نمایش خطای واقعی سرور)
+    const APP_FILE_VERSION = 'v16.22-html';
     const LS_CACHE = 'ptw_lead_zinc_cache_v2';
     const LS_OFFLINE_QUEUE = 'ptw_offline_queue_v2';
     const LS_SECONDARY_API = 'ptw_secondary_api_url_v2';
@@ -1567,8 +1593,8 @@
     /* ============================================================
        اتصال مستقیم لایه ۴ (Direct POST با پشتیبانی هوشمند)
        ============================================================ */
-    const WRITE_ACTIONS = ['approvePermit','rejectPermit','reinspectPermit','closePermit','savePatrolVisit','reactivatePermit','setgrant','setReactivation','setCreatePermit','createPermit','deletepermit','saveunitssettings'];
-    const READ_LIGHT = ['permits','visits','ping','test','listusers','getunitssettings','analyzepermit'];
+    const WRITE_ACTIONS = ['approvePermit','rejectPermit','reinspectPermit','closePermit','savePatrolVisit','reactivatePermit','setgrant','setReactivation','setCreatePermit','createPermit','deletepermit','saveunitssettings','savehsecatalog','setuseraccess','savelogo','exportpermits'];
+    const READ_LIGHT = ['permits','visits','ping','test','listusers','getunitssettings','analyzepermit','gethsecatalog'];
     let probeInFlight = null;
     let lastProbeAt = 0;
 
@@ -1764,6 +1790,7 @@
         try {
           const parsed = await sendOnLayer(idx, payload, slice);
           if(parsed){
+            if(parsed.ok && write && typeof playSuccessBeep === 'function') playSuccessBeep();
             lockLayer(idx, Date.now() - t0);
             return parsed;
           }
@@ -2139,12 +2166,56 @@
       }
     }
 
+
+    let successBeepOn = false;
+    function updateBeepBadge(){
+      const el = document.getElementById('beepStateBadge');
+      if(el) el.textContent = successBeepOn ? 'روشن' : 'خاموش';
+    }
+    function playSuccessBeep(){
+      if(!successBeepOn) return;
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if(!Ctx) return;
+        if(!window.__ptwAudio) window.__ptwAudio = new Ctx();
+        const ctx = window.__ptwAudio;
+        if(ctx.state === 'suspended') ctx.resume();
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sine';
+        o.frequency.setValueAtTime(880, ctx.currentTime);
+        o.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.08);
+        g.gain.setValueAtTime(0.0001, ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
+        o.connect(g); g.connect(ctx.destination);
+        o.start();
+        o.stop(ctx.currentTime + 0.2);
+      } catch(e){}
+    }
+    const _toastRaw = (typeof toast === 'function') ? toast : null;
     function toast(msg){
       const t = document.getElementById('toast');
-      t.textContent = msg;
-      t.classList.add('show');
-      setTimeout(() => t.classList.remove('show'), 3000);
+      if(t){
+        t.textContent = msg;
+        t.classList.add('show');
+        setTimeout(() => t.classList.remove('show'), 3000);
+      }
     }
+    async function toggleSuccessBeep(){
+      if(!me || !me.isAdmin){ toast('فقط مدیر'); return; }
+      try{
+        const res = await callAPI('setbeep', { code: me.code, on: !successBeepOn });
+        if(res && res.ok){
+          successBeepOn = !!res.beep;
+          updateBeepBadge();
+          toast(res.message || (successBeepOn?'بیپ روشن شد':'بیپ خاموش شد'));
+          if(successBeepOn) playSuccessBeep();
+        } else toast('خطا: ' + ((res && res.error)||''));
+      }catch(e){ toast('خطا در تنظیم بیپ'); }
+    }
+
+
 
     /* ============================================================
        ابزار تاریخ شمسی برای تمدید پرمیت
@@ -2458,6 +2529,104 @@
       } else {
         toast('❌ خطا در ذخیره تنظیمات');
       }
+    }
+
+    let hseCatalog = { types: [], checklist: [], knowledge: [] };
+    function applyWorkTypesToForm(){
+      const box = document.getElementById('cpWorkTypeBox');
+      if(!box) return;
+      const types = (hseCatalog.types && hseCatalog.types.length) ? hseCatalog.types : [{name:'روتین'},{name:'غیر روتین'}];
+      const cur = ((document.querySelector('input[name="cpWorkTypeRadio"]:checked')||{}).value) || types[0].name;
+      box.innerHTML = types.map(function(t,i){
+        const n = t.name || t;
+        return '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:700;color:var(--d);background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:6px 8px"><input type="radio" name="cpWorkTypeRadio" value="'+esc(n)+'" '+(n===cur||(!cur&&i===0)?'checked':'')+' onchange="onWorkTypeChange()" style="width:auto" /> '+esc(n)+'</label>';
+      }).join('');
+      onWorkTypeChange();
+    }
+    function onWorkTypeChange(){
+      const v = ((document.querySelector('input[name="cpWorkTypeRadio"]:checked')||{}).value) || '';
+      const t = (hseCatalog.types||[]).find(function(x){ return x.name === v; });
+      const w = document.getElementById('cpWorkTypeWarn');
+      if(w){
+        if(t && t.warning){ w.style.display='block'; w.textContent = t.warning; }
+        else w.style.display='none';
+      }
+      if(typeof updateLivePreview==='function') updateLivePreview();
+    }
+    function applyChecklistToPatrol(){
+      const box = document.getElementById('patrolChecklistBox');
+      if(!box) return;
+      const items = (hseCatalog.checklist && hseCatalog.checklist.length) ? hseCatalog.checklist : [];
+      if(!items.length) return;
+      box.innerHTML = items.map(function(txt,i){
+        return '<div class="chk-item"><input type="checkbox" class="patrol-chk"> <span>'+(i+1)+'. '+esc(txt)+'</span></div>';
+      }).join('');
+    }
+    async function loadHseCatalog(){
+      try{
+        const res = await callAPI('gethsecatalog', { action:'gethsecatalog' }, 12000);
+        if(res && res.ok){
+          hseCatalog.types = res.types || [];
+          hseCatalog.checklist = res.checklist || [];
+          hseCatalog.knowledge = res.knowledge || [];
+          applyWorkTypesToForm();
+          applyChecklistToPatrol();
+        }
+      }catch(e){}
+    }
+    function openHseCatalogModal(){
+      if(!me || !me.isAdmin){ toast('فقط مدیر'); return; }
+      const tEl = document.getElementById('hseTypesText');
+      const cEl = document.getElementById('hseCheckText');
+      const kEl = document.getElementById('hseKnowText');
+      if(tEl) tEl.value = (hseCatalog.types||[]).map(function(t){ return [t.name,t.warning||'',t.keywords||''].join(' | '); }).join('\n');
+      if(cEl) cEl.value = (hseCatalog.checklist||[]).join('\n');
+      if(kEl) kEl.value = (hseCatalog.knowledge||[]).map(function(k){ return [k.topic||'', k.text||''].join(' | '); }).join('\n');
+      lockBodyScroll(true);
+      document.getElementById('hseCatalogModal').classList.add('show');
+      loadHseCatalog().then(function(){
+        if(tEl && !tEl.value) tEl.value = (hseCatalog.types||[]).map(function(t){ return [t.name,t.warning||'',t.keywords||''].join(' | '); }).join('\n');
+        if(cEl && !cEl.value) cEl.value = (hseCatalog.checklist||[]).join('\n');
+        if(kEl && !kEl.value) kEl.value = (hseCatalog.knowledge||[]).map(function(k){ return [k.topic||'', k.text||''].join(' | '); }).join('\n');
+      });
+    }
+    function closeHseCatalogModal(){
+      lockBodyScroll(false);
+      const el = document.getElementById('hseCatalogModal');
+      if(el) el.classList.remove('show');
+    }
+    async function saveHseCatalog(){
+      if(!me || !me.isAdmin){ toast('فقط مدیر'); return; }
+      const types = (document.getElementById('hseTypesText').value||'').split('\n').map(function(line){
+        const p = line.split('|').map(function(x){ return x.trim(); });
+        if(!p[0]) return null;
+        return { name:p[0], warning:p[1]||'', keywords:p[2]||'' };
+      }).filter(Boolean);
+      const checklist = (document.getElementById('hseCheckText').value||'').split('\n').map(function(x){ return x.trim(); }).filter(Boolean);
+      const knowledge = (document.getElementById('hseKnowText').value||'').split('\n').map(function(line){
+        const p = line.split('|');
+        const topic = (p[0]||'').trim();
+        const text = p.slice(1).join('|').trim();
+        if(!topic && !text) return null;
+        return { topic:topic, text:text };
+      }).filter(Boolean);
+      const res = await callAPI('savehsecatalog', { code: me.code, types: JSON.stringify(types), checklist: JSON.stringify(checklist), knowledge: JSON.stringify(knowledge) }, 20000);
+      if(res && res.ok){
+        hseCatalog.types = res.types || types;
+        hseCatalog.checklist = res.checklist || checklist;
+        hseCatalog.knowledge = res.knowledge || knowledge;
+        applyWorkTypesToForm();
+        applyChecklistToPatrol();
+        toast(res.message || 'ذخیره شد');
+        closeHseCatalogModal();
+      } else toast('خطا: ' + ((res&&res.error)||''));
+    }
+    async function logAppCheck(kind){
+      if(!me || !me.code) return;
+      const now = Date.now();
+      if(window.__lastCheckinAt && (now - window.__lastCheckinAt) < 90000) return;
+      window.__lastCheckinAt = now;
+      try { await callAPI('checkin', { code: me.code, kind: kind || 'open' }, 8000); } catch(e){}
     }
 
     function toEnglishDigits(str) {
@@ -2826,6 +2995,8 @@
       if(typeof onReqTypeChange==='function') onReqTypeChange();
       onMainLocationChange();
       loadUnitsSettings();
+      applyWorkTypesToForm();
+      loadHseCatalog();
 
       const descEl = document.getElementById('cpDesc');
       if (descEl) descEl.value = '';
@@ -3505,7 +3676,7 @@
           toast('✅ ' + (res.message || 'فایل آماده شد') + (res.rows!=null?(' — '+res.rows+' ردیف'):''));
           const a=document.createElement('a');
           a.href=res.fileUrl;
-          a.download=res.fileName||'permits.csv';
+          a.download=res.fileName||'permits.xlsx';
           a.target='_blank';
           document.body.appendChild(a);
           a.click();
@@ -3549,6 +3720,10 @@
       if(typeof getMyOfflineQueue === 'function' && getMyOfflineQueue().length > 0){
         setTimeout(processOfflineQueue, 1000);
       }
+      setTimeout(function(){ logAppCheck('open'); loadHseCatalog(); }, 400);
+      document.addEventListener('visibilitychange', function(){
+        if(document.visibilityState === 'visible') logAppCheck('resume');
+      });
     }
 
     async function doLogin(){
@@ -3630,6 +3805,7 @@
 
         if(!data || !data.ok) throw new Error();
         if(data.logoUrl) applyAppLogo(data.logoUrl);
+        if(typeof data.beep === 'boolean'){ successBeepOn = data.beep; updateBeepBadge(); }
         rows = Array.isArray(data.rows) ? data.rows : [];
         localStorage.setItem(LS_CACHE, JSON.stringify(rows));
 
@@ -4055,6 +4231,7 @@
       `;
 
       document.getElementById('patrolNotes').value = '';
+      applyChecklistToPatrol();
       document.querySelectorAll('.patrol-chk').forEach(function(c){ c.checked = false; });
       const pg = document.getElementById('photoPreviewGrid');
       if(pg) pg.innerHTML = '';
@@ -4500,6 +4677,7 @@
       viewCreate: closeCreatePermitModal,
       createPermitModal: closeCreatePermitModal,
       unitsManagerModal: closeUnitsManagerModal,
+      hseCatalogModal: closeHseCatalogModal,
       drawer: closeDrawer
     };
     let __overlayHistoryArmed = false;
@@ -4649,4 +4827,7 @@
     window.onload = boot;
   </script>
 </body>
+</html>pt>
+</body>
+</html>y>
 </html>
