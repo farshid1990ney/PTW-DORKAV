@@ -15,7 +15,6 @@
   <title>PTW HSE | سامانه پرمیت کارخانه سرب و روی</title>
   <style>
     @import url('https://cdn.jsdelivr.net/gh/rastikerdar/vazir-font@v30.1.0/dist/font-face.css');
-    @import url('https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css');
     :root {
       --p: #ff6208;
       --d: #1e3c5c;
@@ -315,6 +314,9 @@
     .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
 
     /* مدال‌ها */
+    #photoViewerModal { z-index: 80 !important; }
+    .view-page { z-index: 46; }
+    .thumbs img { -webkit-touch-callout: none; }
     .modal {
       display: none; position: fixed; inset: 0; z-index: 40;
       background: rgba(15,23,42,.6); align-items: flex-end; justify-content: center;
@@ -354,6 +356,44 @@
     th, td { padding: 8px 6px; border-bottom: 1px solid var(--line); text-align: center; white-space: nowrap; }
     th { background: #e2e8f0; color: var(--d); position: sticky; top: 0; z-index: 1; font-weight: 800; }
 
+
+    /* صفحات داخلی لوکال (بدون دانلود HTML جدا) */
+    .view-page {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 46;
+      background: var(--bg);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+    }
+    .view-page.show { display: block; }
+    .view-top {
+      position: sticky; top: 0; z-index: 2;
+      background: linear-gradient(135deg,#0f172a,#1e293b); color:#fff;
+      padding: calc(10px + env(safe-area-inset-top,0px)) 12px 12px;
+      border-bottom: 2px solid var(--p);
+      display: flex; align-items: center; gap: 10px;
+    }
+    .view-top.ai { background: linear-gradient(135deg,#0f766e,#0d9488); border-bottom-color:#14b8a6; }
+    .view-body { padding: 12px; max-width: 720px; margin: 0 auto; padding-bottom: calc(28px + env(safe-area-inset-bottom,0px)); }
+    .thumbs { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+    .thumbs img { width:88px; height:88px; object-fit:cover; border-radius:10px; background:#e2e8f0; cursor:pointer; }
+
+
+    #offlineBanner {
+      display: none;
+      background: #fff7ed;
+      border-bottom: 1px solid #fdba74;
+      color: #9a3412;
+      padding: 8px 12px;
+      font-size: 0.8rem;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    #offlineBanner.show { display: block; }
+    .q-item { background:#fff; border:1px solid #fed7aa; border-radius:12px; padding:10px; margin-bottom:8px; font-size:0.8rem; }
     @media (max-width: 480px) {
       .kv { grid-template-columns: 82px 1fr; }
     }
@@ -431,7 +471,7 @@
         <span class="item-badge" id="mRejectedCnt" style="background:#fee2e2;color:#991b1b">0</span>
       </div>
       <div class="drawer-item admin-only" id="drawerAdminReactivate" style="display:none" onclick="openUsersModal();closeDrawer();">
-      <div class="drawer-item admin-only" id="drawerCreatePermit" style="display:none;color:var(--success)" onclick="openCreatePermitModal();closeDrawer();">
+      <div class="drawer-item admin-only" id="drawerCreatePermit" style="display:none;color:var(--success)" onclick="goCreatePage();closeDrawer();">
         <span>➕ ثبت پرمیت دستی</span>
         <span>جدید</span>
       </div>
@@ -460,8 +500,8 @@
         <span>🔗 اتصال به گوگل‌شیت دوم</span>
         <span>همگام‌سازی</span>
       </div>
-      <div class="drawer-item admin-only" onclick="openOfflineSyncModal();closeDrawer();">
-        <span>📦 صف آفلاین و خروجی دتا</span>
+      <div class="drawer-item" onclick="openOfflineSyncModal();closeDrawer();">
+        <span>📦 صف آفلاین (عکس/گشت منتظر ارسال)</span>
         <span class="item-badge" id="mOfflineCnt">0</span>
       </div>
 
@@ -496,7 +536,7 @@
             </div>
           </div>
           <div style="display:flex;gap:6px">
-            <button class="icon" id="headerCreateBtn" title="➕ ثبت پرمیت جدید" onclick="openCreatePermitModal()" style="display:none;background:linear-gradient(135deg,#10b981,#059669);color:#fff;font-size:1.15rem;box-shadow:0 3px 10px rgba(16,185,129,.4)">➕</button>
+            <button class="icon" id="headerCreateBtn" title="➕ ثبت پرمیت جدید" onclick="goCreatePage()" style="display:none;background:linear-gradient(135deg,#10b981,#059669);color:#fff;font-size:1.15rem;box-shadow:0 3px 10px rgba(16,185,129,.4)">➕</button>
             <button class="icon btn-refresh-header" id="headerRefreshBtn" title="🔄 بروزرسانی" onclick="loadPermits()">🔄</button>
             <button class="icon" title="ℹ️ راهنما" onclick="openHelpModal()">ℹ️</button>
           </div>
@@ -539,6 +579,7 @@
       </div>
     </div>
 
+    <div id="offlineBanner" onclick="openOfflineSyncModal()">📦 <span id="offlineBannerText">مواردی در صف آفلاین است</span> — برای دیدن لیست بزنید</div>
     <!-- لیست کارت‌های پرمیت -->
     <div class="wrap" id="list"></div>
   </div>
@@ -644,10 +685,14 @@
   <div class="modal" id="offlineSyncModal">
     <div class="panel">
       <h2>📦 صف آفلاین و ذخیره محلی (مناطق فاقد آنتن)</h2>
-      <div style="background:#f8fafc;padding:12px;border-radius:12px;border:1px solid #cbd5e1;margin-bottom:12px">
-        <strong style="color:var(--d)">📌 صف آفلاین گوشی:</strong>
-        <p style="font-size:0.8rem;margin:4px 0 8px">تعداد <b id="queuedItemsCount">0</b> عملیات ثبت گشت/بستن پرمیت آفلاین منتظر ارسال است.</p>
-        <button class="btn btn-g btn-sm" onclick="processOfflineQueue()">🔄 ارسال مجدد صف آفلاین به شیت</button>
+      <div style="background:#fff7ed;padding:12px;border-radius:12px;border:1px solid #fdba74;margin-bottom:12px">
+        <strong style="color:#9a3412">📌 صف آفلاین گوشی — دوباره ارسال نکنید</strong>
+        <p style="font-size:0.8rem;margin:4px 0 8px;font-weight:700">تعداد <b id="queuedItemsCount">0</b> مورد ذخیره‌شده. تا وقتی این‌ها در صف‌اند همان گشت/عکس را دوباره نفرستید.</p>
+        <div id="offlineQueueList" style="max-height:40vh;overflow-y:auto;margin-bottom:8px"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-g btn-sm" onclick="processOfflineQueue()">🔄 ارسال صف به شیت</button>
+          <button class="btn btn-x btn-sm" onclick="clearOfflineQueueConfirm()">🗑️ خالی کردن صف</button>
+        </div>
       </div>
       <div style="background:#fff7ed;padding:12px;border-radius:12px;border:1px solid #fdba74">
         <strong style="color:#9a3412">📲 خروجی/ورودی فیزیکی دتا (Off-Grid):</strong>
@@ -703,6 +748,23 @@
     </div>
   </div>
 
+
+  <!-- صفحات داخلی لوکال: تاریخچه و تحلیل AI (بدون رفتن به فایل جدا) -->
+  <div class="view-page" id="viewHistory">
+    <div class="view-top">
+      <button class="icon" type="button" onclick="phoneBack()">➜</button>
+      <div><h1 style="margin:0;font-size:1rem">📋 تاریخچه گشت HSE</h1><small id="viewHistorySub">—</small></div>
+    </div>
+    <div class="view-body" id="viewHistoryBody"><div class="hint">در حال بارگذاری...</div></div>
+  </div>
+  <div class="view-page" id="viewAnalyze">
+    <div class="view-top ai">
+      <button class="icon" type="button" onclick="phoneBack()">➜</button>
+      <div><h1 style="margin:0;font-size:1rem">🧠 تحلیل هوشمند ایمنی</h1><small id="viewAnalyzeSub">—</small></div>
+    </div>
+    <div class="view-body" id="viewAnalyzeBody"><div class="hint">در حال بارگذاری...</div></div>
+  </div>
+
   <!-- مدال مشاهده عکس گشت: عکس داخل خودِ برنامه نمایش داده می‌شود تا در گوشی‌هایی مثل سامسونگ
        با باز شدن لینک گوگل‌درایو، اپ Drive باز نشود و برگشت به برنامه دچار مشکل نگردد -->
   <div class="modal" id="photoViewerModal">
@@ -714,7 +776,7 @@
       <div id="photoViewerBody" style="text-align:center;min-height:160px;display:flex;align-items:center;justify-content:center">
         <div style="color:var(--muted);font-size:0.85rem">در حال بارگذاری عکس...</div>
       </div>
-      <div class="hint" style="margin-top:8px">اگر عکس نمایش داده نشد، <a id="photoViewerFallbackLink" href="#" target="_blank" rel="noopener" style="color:var(--p)">اینجا بزنید</a> تا در مرورگر باز شود.</div>
+      <div class="hint" style="margin-top:8px">عکس داخل خود برنامه باز می‌شود تا از اپ خارج نشوید.</div>
     </div>
   </div>
 
@@ -726,13 +788,13 @@
 
       <div style="margin-bottom:10px;background:#f8fafc;padding:10px;border-radius:12px;border:1px solid #e2e8f0">
         <div style="font-size:0.78rem;font-weight:800;color:var(--d);margin-bottom:4px">📋 چک‌لیست کنترلی سرب و روی (HSE):</div>
-        <div class="chk-item"><input type="checkbox" class="patrol-chk" checked> <span>۱. ماسک تنفسی P3 / FFP3 و تجهیزات ضد غبار سرب</span></div>
-        <div class="chk-item"><input type="checkbox" class="patrol-chk" checked> <span>۲. قفل و برچسب ایمنی LOTO و قطع برق کامل تجهیز</span></div>
-        <div class="chk-item"><input type="checkbox" class="patrol-chk" checked> <span>۳. کپسول اطفاء حریق / پایش گاز / Fire Watch</span></div>
-        <div class="chk-item"><input type="checkbox" class="patrol-chk" checked> <span>۴. نوارخطر و ایمن‌سازی محدوده و نصب تابلو هشدار</span></div>
-        <div class="chk-item"><input type="checkbox" class="patrol-chk" checked> <span>۵. هارنس دو قلاب / داربست استاندارد در ارتفاع</span></div>
-        <div class="chk-item"><input type="checkbox" class="patrol-chk" checked> <span>۶. برگزاری جلسات ایمنی قبل از کار (TBM)</span></div>
-        <div class="chk-item"><input type="checkbox" class="patrol-chk" checked> <span>۷. مسدود نبودن مسیرهای فرار اضطراری و کلید Emergency</span></div>
+        <div class="chk-item"><input type="checkbox" class="patrol-chk"> <span>۱. ماسک تنفسی P3 / FFP3 و تجهیزات ضد غبار سرب</span></div>
+        <div class="chk-item"><input type="checkbox" class="patrol-chk"> <span>۲. قفل و برچسب ایمنی LOTO و قطع برق کامل تجهیز</span></div>
+        <div class="chk-item"><input type="checkbox" class="patrol-chk"> <span>۳. کپسول اطفاء حریق / پایش گاز / Fire Watch</span></div>
+        <div class="chk-item"><input type="checkbox" class="patrol-chk"> <span>۴. نوارخطر و ایمن‌سازی محدوده و نصب تابلو هشدار</span></div>
+        <div class="chk-item"><input type="checkbox" class="patrol-chk"> <span>۵. هارنس دو قلاب / داربست استاندارد در ارتفاع</span></div>
+        <div class="chk-item"><input type="checkbox" class="patrol-chk"> <span>۶. برگزاری جلسات ایمنی قبل از کار (TBM)</span></div>
+        <div class="chk-item"><input type="checkbox" class="patrol-chk"> <span>۷. مسدود نبودن مسیرهای فرار اضطراری و کلید Emergency</span></div>
       </div>
 
       <label>نتیجه ارزیابی گشت</label>
@@ -750,13 +812,13 @@
         <span>🔒 عملیات تمام شده و پرمیت هم‌زمان بسته شود</span>
       </label>
 
-      <label style="margin-top:10px">📷 ثبت عکس مستقیم (آپلود در Google Drive)</label>
+      <label style="margin-top:10px">📷 عکس گشت (تا ۵ عکس همزمان)</label>
       <div class="camera-box" onclick="document.getElementById('patrolPhotoInput').click()">
         <div style="font-size:1.6rem">📷</div>
-        <div style="font-weight:800;font-size:0.82rem;color:var(--d)">گرفتن عکس با دوربین گوشی</div>
-        <div id="photoSizeLabel" style="font-size:0.7rem;color:var(--muted);margin-top:4px">📦 حجم خودکار تا ~۵۰۰KB کاهش می‌یابد</div>
-        <input type="file" id="patrolPhotoInput" accept="image/*" capture="environment" style="display:none" onchange="handlePatrolPhotoSelect(this)" />
-        <img id="photoPreview" class="preview-img" alt="پیش‌نمایش" />
+        <div style="font-weight:800;font-size:0.82rem;color:var(--d)">چند عکس از گالری یا دوربین</div>
+        <div id="photoSizeLabel" style="font-size:0.7rem;color:var(--muted);margin-top:4px">حداکثر ۵ عکس — فشرده می‌شوند</div>
+        <input type="file" id="patrolPhotoInput" accept="image/*" multiple style="display:none" onchange="handlePatrolPhotoSelect(this)" />
+        <div id="photoPreviewGrid" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
       </div>
 
       <div style="display:flex;gap:8px;margin-top:14px">
@@ -797,9 +859,13 @@
   </div>
 
   <!-- مدال ثبت دستی پرمیت (نیازمند مجوز مدیر ارشد) -->
-  <div class="modal" id="createPermitModal">
-    <div class="panel" style="max-width:680px;max-height:92vh;overflow-y:auto">
-      <h2>➕ ثبت گزارش کار و تجهیزات (پرمیت جدید)</h2>
+  <div class="view-page" id="viewCreate">
+    <div class="view-top" style="background:linear-gradient(135deg,#065f46,#10b981);border-bottom-color:#34d399">
+      <button class="icon" type="button" onclick="phoneBack()">➜</button>
+      <div><h1 style="margin:0;font-size:1rem">➕ ثبت پرمیت جدید</h1><small id="viewCreateSub">فرم کامل روی همین صفحه</small></div>
+    </div>
+    <div class="view-body" id="viewCreateBody">
+
       
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <span class="hint" style="margin:0">تمام مشخصات به صورت پویا (آبشاری) انتخاب شده و در لحظه اعتبارسنجی می‌شوند.</span>
@@ -880,6 +946,44 @@
         <div style="margin-top:12px;padding:8px 12px;background:#e2e8f0;border-radius:8px;display:flex;justify-content:space-between;align-items:center;font-size:0.82rem">
           <span style="font-weight:700;color:var(--d)">⏱️ زمان انتخابی برای شروع پرمیت:</span>
           <strong id="cpSelectedDateTimeBadge" style="color:var(--p);font-weight:900;font-size:0.9rem">—</strong>
+        </div>
+      </div>
+
+      <label style="margin-top:8px">واحد درخواست‌کننده *</label>
+      <div style="display:flex;gap:16px;margin-bottom:6px">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:700;color:var(--d)">
+          <input type="radio" name="cpReqType" value="internal" checked onchange="onReqTypeChange()" style="width:auto" />
+          ۱) واحد داخلی
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:700;color:var(--d)">
+          <input type="radio" name="cpReqType" value="contractor" onchange="onReqTypeChange()" style="width:auto" />
+          ۲) پیمانکار
+        </label>
+      </div>
+      <div id="cpReqInternalWrap">
+        <select id="cpRequesterUnit" onchange="onReqInternalChange()" style="width:100%;font-weight:700"></select>
+        <div id="cpReqMechWrap" style="display:none;margin-top:6px;padding:8px;background:var(--bg);border-radius:8px;border:1px dashed var(--line)">
+          <label style="color:var(--p);font-size:0.8rem;font-weight:800;margin:0">زیرمجموعه مکانیک:</label>
+          <select id="cpReqMechSub" onchange="updateLivePreview()" style="margin-top:4px">
+            <option value="عمومی مکانیک">عمومی مکانیک</option>
+            <option value="۴.۱ روانکاری">۴.۱ روانکاری</option>
+          </select>
+        </div>
+        <div id="cpReqElecWrap" style="display:none;margin-top:6px;padding:8px;background:var(--bg);border-radius:8px;border:1px dashed var(--line)">
+          <label style="color:var(--p);font-size:0.8rem;font-weight:800;margin:0">زیرمجموعه برق:</label>
+          <select id="cpReqElecSub" onchange="updateLivePreview()" style="margin-top:4px">
+            <option value="عمومی برق">عمومی برق</option>
+            <option value="۵.۱ ابزار دقیق">۵.۱ ابزار دقیق</option>
+          </select>
+        </div>
+        <div id="cpReqCustomUnitWrap" style="display:none;margin-top:6px">
+          <input id="cpReqCustomUnitInput" placeholder="نام واحد داخلی جدید را تایپ کنید..." oninput="updateLivePreview()" />
+        </div>
+      </div>
+      <div id="cpReqContractorWrap" style="display:none;margin-bottom:8px">
+        <select id="cpReqContractorCompany" onchange="onReqContractorChange()" style="width:100%;font-weight:700"></select>
+        <div id="cpReqCustomCoWrap" style="display:none;margin-top:6px">
+          <input id="cpReqCustomCoInput" placeholder="نام شرکت پیمانکاری را تایپ کنید..." oninput="updateLivePreview()" />
         </div>
       </div>
 
@@ -1005,7 +1109,7 @@
 
       <div style="display:flex;gap:8px;margin-top:16px">
         <button class="btn btn-p" style="flex:2;font-size:1rem;font-weight:800" id="btnConfirmCreatePermit" onclick="confirmCreatePermit()">ثبت نهایی گزارش در شیت 💾</button>
-        <button class="btn btn-d" style="flex:1" onclick="closeCreatePermitModal()">انصراف</button>
+        <button class="btn btn-d" style="flex:1" onclick="phoneBack()">انصراف</button>
       </div>
     </div>
   </div>
@@ -1097,7 +1201,7 @@
 
   <script>
     const LS_SESSION = 'ptw_lead_zinc_session_v2';
-    const EXPECTED_API_VERSION = 'v16.1';   // نسخه سرور مورد انتظار (برای تشخیص Deployment قدیمی)
+    const EXPECTED_API_VERSION = 'v16.5';   // نسخه سرور مورد انتظار (برای تشخیص Deployment قدیمی)
 
     // تعریف ۱۰ مجوز تکی v16 (هم‌خوان با USER_PERMS در بک‌اند Code.gs)
     const PERM_DEFS = [
@@ -1112,7 +1216,7 @@
       { key:'units',        flag:'hasUnits',        can:'canUnits',        icon:'🏢', label:'ویرایش واحدها/پیمانکاران' },
       { key:'analyze',      flag:'hasAnalyze',      can:'canAnalyze',      icon:'🧠', label:'تحلیل هوش مصنوعی (AI)' }
     ];
-    const APP_FILE_VERSION = 'v16.2-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل) — v16.2: فیکس تحلیل AI (ارسال code + نمایش خطای واقعی سرور)
+    const APP_FILE_VERSION = 'v16.15-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل) — v16.2: فیکس تحلیل AI (ارسال code + نمایش خطای واقعی سرور)
     const LS_CACHE = 'ptw_lead_zinc_cache_v2';
     const LS_OFFLINE_QUEUE = 'ptw_offline_queue_v2';
     const LS_SECONDARY_API = 'ptw_secondary_api_url_v2';
@@ -1127,6 +1231,9 @@
     let currentRejectPermit = null;
     let currentReinspectPermit = null;
     let currentPhotoBase64 = '';
+    let currentPhotoList = [];
+    let unitsLoadedOnce = false;
+    let loadPermitsBusy = false;
     
     // قفل اکشن‌های در حال ارسال جهت جلوگیری قطعی از تکرار درخواست
     const inFlightActionKeys = new Set();
@@ -1163,6 +1270,102 @@
         if(s && s !== '—' && !/^column\s*\d*/i.test(s)) return s;
       }
       return '—';
+    }
+
+    const LS_GATE = 'ptw_page_gate_v1';
+    function issuePageGate(page, extra){
+      const tok = 'G' + Date.now().toString(36) + Math.random().toString(36).slice(2,10);
+      const rec = { tok: tok, page: page, exp: Date.now() + 8*60*1000, extra: extra || {} };
+      try { sessionStorage.setItem(LS_GATE, JSON.stringify(rec)); } catch(e){}
+      return tok;
+    }
+    function goHistoryPage(permitNo){
+      if(!me){ toast('ابتدا وارد شوید'); return; }
+      openLocalHistory(permitNo);
+    }
+    function goCreatePage(){
+      if(!me || (!me.isAdmin && !me.canCreatePermit)){ toast('شما مجوز ثبت پرمیت را ندارید.'); return; }
+      openCreatePermitModal();
+    }
+    function goAnalyzePage(permitNo){
+      if (!me || !(me.isAdmin || me.canAnalyze)) { toast('⛔ مجوز «تحلیل هوش مصنوعی» ندارید.'); return; }
+      openLocalAnalyze(permitNo);
+    }
+    function closeLocalView(id){
+      const el = document.getElementById(id);
+      if(el) el.classList.remove('show');
+      lockBodyScroll(false);
+    }
+    function visitPhotoUrls(v){
+      if(v && v.photoUrls && v.photoUrls.length) return v.photoUrls.filter(Boolean);
+      return String((v && v.photoUrl) || '').split('|').map(function(x){ return x.trim(); }).filter(Boolean);
+    }
+    async function openLocalHistory(permitNo){
+      const body = document.getElementById('viewHistoryBody');
+      const sub = document.getElementById('viewHistorySub');
+      if(sub) sub.textContent = 'پرمیت ' + permitNo + ' · داخل گوشی، بدون صفحه جدید';
+      if(body) body.innerHTML = '<div class="hint" style="text-align:center;padding:24px">در حال دریافت تاریخچه...</div>';
+      lockBodyScroll(true);
+      document.getElementById('viewHistory').classList.add('show');
+      try {
+        const res = await getAction8Layers({ action: 'visits', permitNo: String(permitNo).trim(), code: me.code, firstName: me.firstName, lastName: me.lastName }, 12000);
+        if(!res || res.ok===false){ body.innerHTML = '<div class="empty">' + esc((res && res.error) || 'خطا') + '</div>'; return; }
+        const visits = (res.visits||[]).filter(function(v){ return v && !/^column/i.test(v.permitNo||''); });
+        if(!visits.length){ body.innerHTML = '<div class="empty">هیچ بازدیدی ثبت نشده است.</div>'; return; }
+        body.innerHTML = visits.map(function(v, vi){
+          const urls = visitPhotoUrls(v);
+          const thumbs = urls.map(function(u,i){
+            return '<img data-src="'+esc(u)+'" data-urls="'+esc(urls.join('|'))+'" data-i="'+i+'" alt="عکس گشت" />';
+          }).join('');
+          return '<div class="card" style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;gap:8px"><strong>🛡️ '+esc(v.inspectorName)+'</strong><span class="meta">'+esc(v.time)+'</span></div><div style="margin-top:6px">نتیجه: <span class="badge '+(v.result==='مطابق'?'ok':'stop')+'">'+esc(v.result)+'</span> · '+esc(v.scoreText)+'</div>'+(v.notes?'<div style="margin-top:6px;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:8px">📝 '+esc(v.notes)+'</div>':'')+(thumbs?'<div class="thumbs">'+thumbs+'</div>':'<div class="meta" style="margin-top:6px">عکسی ثبت نشده</div>')+'</div>';
+        }).join('');
+        Array.prototype.forEach.call(body.querySelectorAll('.thumbs img'), function(img){
+          bindDriveImage(img, img.getAttribute('data-src'), 400);
+          img.addEventListener('click', function(ev){
+            ev.preventDefault();
+            ev.stopPropagation();
+            const all = String(img.getAttribute('data-src')||'').split('|').filter(Boolean);
+            const urls = String(img.getAttribute('data-urls')||'').split('|').filter(Boolean);
+            const pick = urls[parseInt(img.getAttribute('data-i'),10)] || img.getAttribute('data-src');
+            openPhotoViewerModal(pick, urls);
+            return false;
+          }, true);
+        });
+      } catch(e){
+        body.innerHTML = '<div class="empty">خطا در دریافت تاریخچه</div>';
+      }
+    }
+    async function openLocalAnalyze(permitNo){
+      const pmt = rows.find(x => String(x.permitNo).trim() === String(permitNo).trim());
+      if(!pmt){ toast('پرمیت یافت نشد'); return; }
+      const body = document.getElementById('viewAnalyzeBody');
+      const sub = document.getElementById('viewAnalyzeSub');
+      if(sub) sub.textContent = 'پرمیت ' + permitNo + ' · تحلیل روی همین صفحه';
+      if(body) body.innerHTML = '<div style="text-align:center;padding:28px"><div class="spinning" style="font-size:2rem">🧠</div><div style="font-weight:900;margin-top:8px">در حال تحلیل خطرات...</div><div class="hint">بدون باز کردن صفحه جدا</div></div>';
+      lockBodyScroll(true);
+      document.getElementById('viewAnalyze').classList.add('show');
+      try {
+        const res = await getAction8Layers({
+          action: 'analyzePermit', code: me.code, firstName: me.firstName, lastName: me.lastName,
+          permitNo: String(pmt.permitNo).trim(), workType: pmt.type||'', place: pmt.place||'', desc: pmt.desc||'', unit: pmt.unit||''
+        }, 25000);
+        if(res && res.ok && res.analysis){
+          const a = res.analysis;
+          const rc = a.risk==='پرریسک'?'risk-high':(a.risk==='متوسط'?'risk-med':'risk-low');
+          body.innerHTML = '<div class="card"><div class="no">پرمیت '+esc(pmt.permitNo)+'</div><div class="meta">مجری: '+esc(getContractor(pmt))+' · محل: '+esc(pmt.place||'—')+' · واحد: '+esc(pmt.unit||'—')+'</div>'+(pmt.desc?'<div style="margin-top:8px">'+esc(pmt.desc)+'</div>':'')+'</div>'+
+            '<div class="card"><div style="display:flex;justify-content:space-between;margin-bottom:8px"><span class="badge '+rc+'">ریسک: '+esc(a.risk)+'</span><span class="badge" style="background:#e2e8f0;color:var(--d)">امتیاز: '+esc(a.score)+'/100</span></div>'+
+            '<div style="margin:8px 0"><strong>📂 دسته:</strong> '+esc(a.category)+'</div>'+
+            '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:8px;color:#991b1b;margin-bottom:8px"><strong>⚠️ خطرات:</strong><br>'+esc(a.hazards)+'</div>'+
+            '<div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:8px;color:#065f46;margin-bottom:8px"><strong>🛡️ کنترل‌ها:</strong><br>'+esc(a.controls)+'</div>'+
+            (a.checklist?'<div style="background:#fff;border:1px solid #cbd5e1;border-radius:10px;padding:8px;margin-bottom:8px"><strong>📋 چک‌لیست:</strong><br>'+esc(a.checklist)+'</div>':'')+
+            (a.ppe?'<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:8px"><strong>👷 PPE:</strong><br>'+esc(a.ppe)+'</div>':'')+
+            '<div class="meta" style="margin-top:8px">منبع: '+esc(a.source||'AI')+'</div></div>';
+        } else {
+          body.innerHTML = '<div class="empty">' + esc((res && res.error) || 'تحلیل دریافت نشد') + '</div>';
+        }
+      } catch(e){
+        body.innerHTML = '<div class="empty">خطا در ارتباط تحلیل: '+esc(e.message||e)+'</div>';
+      }
     }
 
 
@@ -1225,27 +1428,79 @@
     function driveThumbUrl(url, size){
       const id = driveFileIdFromUrl(url);
       if(!id) return url;
-      return 'https://drive.google.com/thumbnail?id=' + id + '&sz=w' + (size || 1600);
+      return 'https://lh3.googleusercontent.com/d/' + id + '=w' + (size || 1600);
     }
-    function openPhotoViewerModal(originalUrl){
+    function drivePhotoCandidates(url, size){
+      const id = driveFileIdFromUrl(url);
+      const out = [];
+      if(id){
+        out.push('https://lh3.googleusercontent.com/d/' + id + '=w' + (size || 1600));
+        out.push('https://drive.google.com/thumbnail?id=' + id + '&sz=w' + (size || 1600));
+        out.push('https://drive.google.com/uc?export=view&id=' + id);
+      }
+      if(url) out.push(url);
+      return out;
+    }
+    function bindDriveImage(img, url, size){
+      const cands = drivePhotoCandidates(url, size);
+      let i = 0;
+      img.referrerPolicy = 'no-referrer';
+      img.onerror = function(){
+        if(i < cands.length){ img.src = cands[i++]; }
+      };
+      if(cands.length){ img.src = cands[i++]; }
+    }
+    let __photoStack = [];
+    let __photoIdx = 0;
+    function openPhotoViewerModal(originalUrl, allUrls){
+      const urls = (allUrls && allUrls.length) ? allUrls.slice() : String(originalUrl||'').split('|').map(function(x){ return x.trim(); }).filter(Boolean);
+      __photoStack = urls.length ? urls : [originalUrl];
+      __photoIdx = Math.max(0, __photoStack.indexOf(originalUrl));
+      if(__photoIdx < 0) __photoIdx = 0;
       const body = document.getElementById('photoViewerBody');
       const fallback = document.getElementById('photoViewerFallbackLink');
-      if(fallback) fallback.href = originalUrl;
-      body.innerHTML = '<div style="color:var(--muted);font-size:0.85rem">در حال بارگذاری عکس...</div>';
+      if(fallback){
+        fallback.removeAttribute('href');
+        fallback.onclick = function(ev){ ev.preventDefault(); return false; };
+      }
+      const modal = document.getElementById('photoViewerModal');
+      body.innerHTML = '<div style="color:var(--muted);font-size:0.85rem">در حال بارگذاری عکس داخل برنامه...</div>';
       lockBodyScroll(true);
-      document.getElementById('photoViewerModal').classList.add('show');
-      const img = new Image();
-      img.onload = function(){
-        body.innerHTML = '';
-        img.style.maxWidth = '100%';
-        img.style.maxHeight = '65vh';
-        img.style.borderRadius = '10px';
-        body.appendChild(img);
-      };
-      img.onerror = function(){
-        body.innerHTML = '<div style="color:var(--danger);font-size:0.85rem">عکس در برنامه بارگذاری نشد؛ از لینک زیر استفاده کنید.</div>';
-      };
-      img.src = driveThumbUrl(originalUrl, 1600);
+      modal.classList.add('show');
+      showPhotoInViewer(__photoStack[__photoIdx]);
+    }
+    function showPhotoInViewer(url){
+      const body = document.getElementById('photoViewerBody');
+      if(!body) return;
+      body.innerHTML = '';
+      const wrap = document.createElement('div');
+      wrap.style.textAlign = 'center';
+      const img = document.createElement('img');
+      img.alt = 'عکس گشت';
+      img.style.maxWidth = '100%';
+      img.style.maxHeight = '65vh';
+      img.style.borderRadius = '10px';
+      img.referrerPolicy = 'no-referrer';
+      img.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); });
+      const cands = drivePhotoCandidates(url, 1600);
+      let i = 0;
+      function tryNext(){
+        if(i >= cands.length){
+          body.innerHTML = '<div style="color:var(--danger);font-size:0.85rem">عکس در برنامه بارگذاری نشد.</div>';
+          return;
+        }
+        img.src = cands[i++];
+      }
+      img.onload = function(){ body.innerHTML=''; body.appendChild(wrap); wrap.appendChild(img); if(__photoStack.length>1){
+        const nav=document.createElement('div');
+        nav.style.marginTop='8px';
+        nav.innerHTML = '<button type="button" class="btn btn-d btn-sm" id="pvPrevBtn">قبلی</button> <span class="hint">' + (__photoIdx+1) + '/' + __photoStack.length + '</span> <button type="button" class="btn btn-d btn-sm" id="pvNextBtn">بعدی</button>';
+        body.appendChild(nav);
+        document.getElementById('pvPrevBtn').onclick=function(e){ e.preventDefault(); __photoIdx=(__photoIdx-1+__photoStack.length)%__photoStack.length; showPhotoInViewer(__photoStack[__photoIdx]); };
+        document.getElementById('pvNextBtn').onclick=function(e){ e.preventDefault(); __photoIdx=(__photoIdx+1)%__photoStack.length; showPhotoInViewer(__photoStack[__photoIdx]); };
+      }};
+      img.onerror = tryNext;
+      tryNext();
     }
     function closePhotoViewerModal(){
       lockBodyScroll(false);
@@ -1285,73 +1540,217 @@
     /* ============================================================
        اتصال مستقیم لایه ۴ (Direct POST با پشتیبانی هوشمند)
        ============================================================ */
-    async function callAPI(action, params = {}, timeoutMs = 25000) {
-      const pUrl = primaryApiUrl();
-      const payload = Object.assign({ action: action }, params);
+    const WRITE_ACTIONS = ['approvePermit','rejectPermit','reinspectPermit','closePermit','savePatrolVisit','reactivatePermit','setgrant','setReactivation','setCreatePermit','createPermit','deletepermit','saveunitssettings'];
+    const READ_LIGHT = ['permits','visits','ping','test','listusers','getunitssettings','analyzepermit'];
+    let probeInFlight = null;
+    let lastProbeAt = 0;
 
+    function isWriteAction(action){
+      return WRITE_ACTIONS.indexOf(String(action||'')) !== -1;
+    }
+    function isHeavyPayload(payload){
+      if(!payload) return false;
+      if(payload.photoBase64 || payload.photosBase64) return true;
+      try { return JSON.stringify(payload).length > 4000; } catch(e){ return false; }
+    }
+    function payloadQuery(payload){
+      return Object.keys(payload).map(function(k){
+        if(k === 'photoBase64' || k === 'photosBase64' || k === '_fromQueue' || k === '_ownerCode' || k === '_ownerName' || k === '_enqueuedAt' || k === '_photosDropped') return '';
+        const val = payload[k];
+        if(val && typeof val === 'object') return '';
+        return encodeURIComponent(k) + '=' + encodeURIComponent(val == null ? '' : val);
+      }).filter(Boolean).join('&');
+    }
+    function lockLayer(idx, latency){
+      lockedLayer = idx;
+      lockedLatency = latency || 0;
+      try {
+        localStorage.setItem(LS_LOCKED_LAYER, String(idx));
+        localStorage.setItem('ptw_locked_latency', String(lockedLatency));
+      } catch(e){}
+      updateActiveLayerUI(idx, lockedLatency);
+    }
+    function parseApiText(txt){
+      if(!txt) return null;
+      const s = String(txt).trim();
+      try { return JSON.parse(s); } catch(e){}
+      const m = s.match(/\{[\s\S]*\}/);
+      if(m){ try { return JSON.parse(m[0]); } catch(e2){} }
+      return null;
+    }
+
+    async function tryLayer4(url, payload, timeoutMs){
+      const resp = await fetchWithTimeout(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+      }, timeoutMs);
+      if(!resp || !resp.ok) throw new Error('L4 status');
+      const parsed = parseApiText(await resp.text());
+      if(!parsed) throw new Error('L4 json');
+      return parsed;
+    }
+    async function tryLayer3(url, payload, timeoutMs){
+      if(isHeavyPayload(payload)) throw new Error('L3 heavy');
+      const q = payloadQuery(payload);
+      const full = url + (url.indexOf('?') === -1 ? '?' : '&') + q;
+      const resp = await fetchWithTimeout(full, { method: 'GET' }, timeoutMs);
+      if(!resp || !resp.ok) throw new Error('L3 status');
+      const parsed = parseApiText(await resp.text());
+      if(!parsed) throw new Error('L3 json');
+      return parsed;
+    }
+    function tryLayer2(url, payload, timeoutMs){
+      return new Promise(function(resolve, reject){
+        if(isHeavyPayload(payload)){ reject(new Error('L2 heavy')); return; }
+        const cb = '__ptwjp' + Date.now() + Math.floor(Math.random()*10000);
+        let done = false;
+        const to = setTimeout(function(){
+          if(done) return;
+          done = true;
+          try { delete window[cb]; } catch(e){}
+          if(s.parentNode) s.parentNode.removeChild(s);
+          reject(new Error('L2 timeout'));
+        }, timeoutMs || 1000);
+        window[cb] = function(data){
+          if(done) return;
+          done = true;
+          clearTimeout(to);
+          try { delete window[cb]; } catch(e){}
+          if(s.parentNode) s.parentNode.removeChild(s);
+          if(data) resolve(data); else reject(new Error('L2 empty'));
+        };
+        const q = payloadQuery(Object.assign({}, payload, { callback: cb, jsonp: cb }));
+        const s = document.createElement('script');
+        s.src = url + (url.indexOf('?') === -1 ? '?' : '&') + q;
+        s.onerror = function(){
+          if(done) return;
+          done = true;
+          clearTimeout(to);
+          try { delete window[cb]; } catch(e){}
+          if(s.parentNode) s.parentNode.removeChild(s);
+          reject(new Error('L2 script'));
+        };
+        document.head.appendChild(s);
+      });
+    }
+    async function tryLayer5(payload, timeoutMs){
+      const sUrl = secondaryApiUrl();
+      if(!sUrl) throw new Error('L5 none');
+      try { return await tryLayer4(sUrl, payload, timeoutMs); }
+      catch(e){ return await tryLayer3(sUrl, payload, timeoutMs); }
+    }
+
+    async function probeChannels(){
+      if(probeInFlight) return probeInFlight;
+      if(typeof navigator !== 'undefined' && navigator.onLine === false){
+        updateActiveLayerUI(6, 0);
+        return { ok:false, offline:true };
+      }
+      const url = primaryApiUrl();
+      const ping = { action: 'ping', txnId: 'PING_' + Date.now() };
+      const jobs = [
+        { idx: 4, run: function(){ return tryLayer4(url, ping, 1000); } },
+        { idx: 3, run: function(){ return tryLayer3(url, ping, 1000); } },
+        { idx: 2, run: function(){ return tryLayer2(url, ping, 1000); } }
+      ];
+      if(secondaryApiUrl()) jobs.push({ idx: 5, run: function(){ return tryLayer5(ping, 1000); } });
+
+      probeInFlight = new Promise(function(resolve){
+        let settled = false;
+        let left = jobs.length;
+        jobs.forEach(function(job){
+          const t0 = Date.now();
+          Promise.resolve().then(job.run).then(function(res){
+            left--;
+            if(settled) return;
+            if(res && (res.ok === true || res.version || res.message)){
+              settled = true;
+              const ms = Date.now() - t0;
+              lockLayer(job.idx, ms);
+              lastProbeAt = Date.now();
+              resolve({ ok:true, layer: job.idx, latency: ms, res: res });
+            } else if(left<=0 && !settled){
+              settled = true;
+              resolve({ ok:false });
+            }
+          }).catch(function(){
+            left--;
+            if(left<=0 && !settled){
+              settled = true;
+              resolve({ ok:false });
+            }
+          });
+        });
+      });
+      try { return await probeInFlight; }
+      finally { probeInFlight = null; }
+    }
+
+    async function sendOnLayer(idx, payload, timeoutMs){
+      const url = primaryApiUrl();
+      if(idx === 4) return await tryLayer4(url, payload, timeoutMs);
+      if(idx === 3) return await tryLayer3(url, payload, timeoutMs);
+      if(idx === 2) return await tryLayer2(url, payload, timeoutMs);
+      if(idx === 5) return await tryLayer5(payload, timeoutMs);
+      throw new Error('bad layer');
+    }
+
+    function fallbackOrder(preferred, payload){
+      const heavy = isHeavyPayload(payload);
+      const write = isWriteAction(payload.action);
+      let order = [];
+      const add = function(n){ if(order.indexOf(n)===-1) order.push(n); };
+      if(preferred) add(preferred);
+      add(4);
+      if(!heavy){ add(3); add(2); }
+      if(secondaryApiUrl()) add(5);
+      if(heavy || write){
+        order = order.filter(function(n){ return n===4 || n===5; });
+        if(!order.length) order = [4];
+      }
+      return order;
+    }
+
+    async function callAPI(action, params = {}, timeoutMs) {
+      const payload = Object.assign({ action: action }, params);
       if (!payload.txnId) {
         payload.txnId = 'TXN_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
       }
+      const write = isWriteAction(action);
+      const online = (typeof navigator === 'undefined') ? true : navigator.onLine;
 
-      // ۱) ارسال مستقیم POST با هدر text/plain (لایه ۴)
-      const t0 = Date.now();
-      try {
-        const resp = await fetchWithTimeout(pUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify(payload)
-        }, timeoutMs);
-
-        if (resp && resp.ok) {
-          const txt = await resp.text();
-          try {
-            const parsed = JSON.parse(txt);
-            const latency = Date.now() - t0;
-            updateActiveLayerUI(4, latency);
-            return parsed;
-          } catch(eJ) {
-            console.error('Invalid JSON response from POST:', txt);
-          }
-        }
-      } catch(ePrimary) {
-        console.warn('Layer 4 Direct POST failed, trying query fallback:', ePrimary);
-      }
-
-      // ۲) پشتیبانی با متد GET در صورت بروز مشکل ریدایرکت ۳۰۲ در برخی مرورگرها
-      try {
-        const q = Object.keys(payload).map(function(k){
-          return encodeURIComponent(k) + '=' + encodeURIComponent(payload[k] == null ? '' : payload[k]);
-        }).join('&');
-        const respGet = await fetchWithTimeout(pUrl + (pUrl.indexOf('?') === -1 ? '?' : '&') + q, {
-          method: 'GET'
-        }, timeoutMs);
-
-        if (respGet && respGet.ok) {
-          const txtGet = await respGet.text();
-          try {
-            const parsedGet = JSON.parse(txtGet);
-            const latency = Date.now() - t0;
-            updateActiveLayerUI(4, latency);
-            return parsedGet;
-          } catch(eJGet) {
-            console.error('Invalid JSON response from GET:', txtGet);
-          }
-        }
-      } catch(eGet) {
-        console.warn('GET query fallback failed:', eGet);
-      }
-
-      // ۳) مدیریت عملیات در صف آفلاین
-      const WRITE_ACTIONS = ['approvePermit','rejectPermit','reinspectPermit','closePermit','savePatrolVisit','reactivatePermit','setgrant','setReactivation','setCreatePermit','createPermit','deletepermit','saveunitssettings'];
-      if (WRITE_ACTIONS.includes(action)) {
+      if(write && online === false){
         enqueueOfflineAction(payload);
         updateActiveLayerUI(6, 0);
-        const online = (typeof navigator !== 'undefined') ? navigator.onLine : true;
-        const reason = online ? 'ارتباط با سرور برقرار نشد؛ لطفاً اتصال اینترنت یا آدرس وب‌اپلیکیشن را بررسی کنید.' : 'اینترنت گوشی قطع است.';
-        return { ok: false, offlineQueued: true, error: reason + ' عملیات در صف آفلاین ذخیره شد.' };
+        return { ok:false, offlineQueued:true, error:'اینترنت گوشی قطع است. عملیات در صف آفلاین شما ذخیره شد.' };
       }
 
-      // ۴) بارگذاری از کش در صورت قطعی شبکه برای پرمیت‌ها
+      const t0 = Date.now();
+      const defT = timeoutMs || (isHeavyPayload(payload) ? 25000 : (write ? 15000 : 10000));
+      const order = fallbackOrder(lockedLayer || 4, payload);
+      let lastErr = null;
+      for(let i=0;i<order.length;i++){
+        const idx = order[i];
+        const slice = Math.max(1200, Math.floor(defT / Math.max(1, order.length - i)));
+        try {
+          const parsed = await sendOnLayer(idx, payload, slice);
+          if(parsed){
+            lockLayer(idx, Date.now() - t0);
+            return parsed;
+          }
+        } catch(e){
+          lastErr = e;
+        }
+      }
+
+      if (write && !payload._fromQueue) {
+        enqueueOfflineAction(payload);
+        updateActiveLayerUI(6, 0);
+        const reason = online ? 'ارتباط با سرور برقرار نشد؛ در صف آفلاین شما ذخیره شد.' : 'اینترنت گوشی قطع است.';
+        return { ok: false, offlineQueued: true, error: reason };
+      }
+
       if (action === 'permits') {
         const cached = localStorage.getItem(LS_CACHE);
         if (cached) {
@@ -1365,10 +1764,9 @@
         }
       }
 
-      const isOnline = (typeof navigator !== 'undefined') ? navigator.onLine : true;
       return {
         ok: false,
-        error: isOnline ? 'خطا در برقراری ارتباط با سرور. لطفاً آدرس وب‌اپلیکیشن یا اتصال اینترنت را بررسی نمایید.' : 'اینترنت دستگاه قطع است.'
+        error: online ? 'خطا در ارتباط با سرور (هیچ لایه‌ای پاسخ نداد).' : 'اینترنت دستگاه قطع است.'
       };
     }
 
@@ -1380,8 +1778,12 @@
       return await callAPI(payload.action, payload);
     }
 
-    function resetChannelLock() {
-      if (typeof toast === 'function') toast('🔄 در حال بررسی ارتباط...');
+    async function resetChannelLock() {
+      if (typeof toast === 'function') toast('🔄 پینگ لایه‌ها...');
+      const r = await probeChannels();
+      if(r && r.ok) toast('✓ لایه فعال: ' + getLayerName(r.layer) + ' (' + r.latency + 'ms)');
+      else toast('⚠️ پینگ ناموفق؛ از کش/صف استفاده می‌شود');
+      window.__silentRefresh = false;
       loadPermits();
     }
 
@@ -1402,39 +1804,121 @@
     function getOfflineQueue() {
       try { return JSON.parse(localStorage.getItem(LS_OFFLINE_QUEUE) || '[]'); } catch(e) { return []; }
     }
+    function myOwnerCode(){
+      return String((me && me.code) || '').trim();
+    }
+    function itemOwnerCode(item){
+      if(!item || typeof item !== 'object') return '';
+      return String(item._ownerCode || item.inspectorCode || item.code || item.actorCode || item.approvedByCode || item.rejectedByCode || item.closedByCode || '').trim();
+    }
+    function isMyQueueItem(item){
+      const mine = myOwnerCode();
+      if(!mine) return false;
+      const own = itemOwnerCode(item);
+      if(!own) return false; // مورد بدون مالک متعلق به این کاربر نیست
+      return own === mine;
+    }
+    function getMyOfflineQueue(){
+      return getOfflineQueue().filter(isMyQueueItem);
+    }
 
+    function queueItemLabel(item){
+      const a = String(item.action||'').toLowerCase();
+      const no = item.permitNo || '';
+      if(a.indexOf('patrol')!==-1) return 'گشت HSE' + (no?(' — پرمیت '+no):'') + (item._photosDropped?' (عکس‌ها ذخیره نشد؛ دوباره فقط وقتی آنلاین شدید بفرستید)':'');
+      if(a.indexOf('create')!==-1) return 'ثبت پرمیت' + (no?(' '+no):'');
+      if(a.indexOf('approve')!==-1) return 'تأیید پرمیت ' + no;
+      if(a.indexOf('reject')!==-1) return 'رد پرمیت ' + no;
+      if(a.indexOf('close')!==-1) return 'بستن پرمیت ' + no;
+      if(a.indexOf('reactivate')!==-1) return 'تمدید پرمیت ' + no;
+      return (item.action||'عملیات') + (no?(' '+no):'');
+    }
+    function isSameQueueItem(a,b){
+      return isMyQueueItem(a) && String(a.action||'')===String(b.action||'') && String(a.permitNo||'')===String(b.permitNo||'') && itemOwnerCode(a)===itemOwnerCode(b);
+    }
     function enqueueOfflineAction(payload) {
       const queue = getOfflineQueue();
-      payload._enqueuedAt = new Date().toISOString();
-      queue.push(payload);
-      localStorage.setItem(LS_OFFLINE_QUEUE, JSON.stringify(queue));
+      const copy = Object.assign({}, payload);
+      copy._enqueuedAt = new Date().toISOString();
+      copy._ownerCode = myOwnerCode() || itemOwnerCode(copy);
+      copy._ownerName = me ? ((me.firstName||'') + ' ' + (me.lastName||'')).trim() : '';
+      if (copy.photoBase64 || (copy.photosBase64 && copy.photosBase64.length)) {
+        copy._photosDropped = true;
+        copy._photoCount = (copy.photosBase64 && copy.photosBase64.length) || (copy.photoBase64?1:0);
+        delete copy.photoBase64;
+        delete copy.photosBase64;
+      }
+      if (queue.some(function(x){ return isSameQueueItem(x, copy); })) {
+        updateDrawerUI();
+        renderOfflineQueueList();
+        toast('⚠️ همین مورد از قبل در صف آفلاین است. دوباره نفرستید.');
+        return;
+      }
+      queue.push(copy);
+      try {
+        localStorage.setItem(LS_OFFLINE_QUEUE, JSON.stringify(queue));
+      } catch(eQ){
+        toast('❌ حافظه گوشی پر است؛ صف ذخیره نشد. اینترنت را وصل کنید و فقط یک‌بار بفرستید.');
+        return;
+      }
       updateDrawerUI();
-      toast('📦 قطعی اینترنت: عملیات در صف آفلاین ذخیره شد.');
+      renderOfflineQueueList();
+      toast('📦 در صف آفلاین ذخیره شد: ' + queueItemLabel(copy) + ' — دوباره ارسال نکنید.');
+    }
+    function renderOfflineQueueList(){
+      const box = document.getElementById('offlineQueueList');
+      const q = getMyOfflineQueue();
+      const ban = document.getElementById('offlineBanner');
+      const banT = document.getElementById('offlineBannerText');
+      if (ban) {
+        if (me && q.length){ ban.classList.add('show'); if(banT) banT.textContent = q.length + ' مورد صف آفلاین شماست. دوباره همان گشت/عکس را نفرستید.'; }
+        else ban.classList.remove('show');
+      }
+      if(!box) return;
+      if(!q.length){ box.innerHTML = '<div class="hint">صف خالی است.</div>'; return; }
+      box.innerHTML = q.map(function(item, i){
+        const when = item._enqueuedAt ? String(item._enqueuedAt).replace('T',' ').slice(0,19) : '';
+        return '<div class="q-item"><div style="font-weight:900">'+esc(queueItemLabel(item))+'</div><div class="hint">'+esc(when)+'</div></div>';
+      }).join('');
+    }
+    function clearOfflineQueueConfirm(){
+      if(!getMyOfflineQueue().length){ toast('صف شما خالی است'); return; }
+      if(!confirm('فقط صف آفلاین خودتان پاک شود؟ موارد دیگران روی این گوشی می‌ماند.')) return;
+      const others = getOfflineQueue().filter(function(x){ return !isMyQueueItem(x); });
+      localStorage.setItem(LS_OFFLINE_QUEUE, JSON.stringify(others));
+      updateDrawerUI();
+      renderOfflineQueueList();
+      toast('صف آفلاین شما خالی شد');
     }
 
     async function processOfflineQueue() {
-      const queue = getOfflineQueue();
-      if (!queue.length) return;
+      const all = getOfflineQueue();
+      const mine = all.filter(isMyQueueItem);
+      const others = all.filter(function(x){ return !isMyQueueItem(x); });
+      if (!mine.length) { renderOfflineQueueList(); return; }
 
-      toast('🔄 در حال همگام‌سازی ' + queue.length + ' آیتم صف آفلاین...');
-      const remaining = [];
+      toast('🔄 در حال ارسال ' + mine.length + ' مورد صف شما...');
+      const remainingMine = [];
 
-      for (let i = 0; i < queue.length; i++) {
-        const item = queue[i];
+      for (let i = 0; i < mine.length; i++) {
+        const item = Object.assign({}, mine[i], { _fromQueue: true });
         try {
           const res = await postAction8Layers(item);
-          if (!res || !res.ok) remaining.push(item);
+          if (!res || !res.ok) remainingMine.push(item);
         } catch(e) {
-          remaining.push(item);
+          remainingMine.push(item);
         }
       }
 
-      localStorage.setItem(LS_OFFLINE_QUEUE, JSON.stringify(remaining));
+      localStorage.setItem(LS_OFFLINE_QUEUE, JSON.stringify(others.concat(remainingMine)));
       updateDrawerUI();
+      renderOfflineQueueList();
 
-      if (remaining.length < queue.length) {
-        toast('✅ همگام‌سازی ' + (queue.length - remaining.length) + ' آیتم صف آفلاین انجام شد.');
-        loadPermits();
+      if (remainingMine.length < mine.length) {
+        toast('✅ ' + (mine.length - remainingMine.length) + ' مورد از صف شما ارسال شد.');
+        refreshQuiet();
+      } else {
+        toast('⚠️ ارسال صف شما انجام نشد. اینترنت را بررسی کنید.');
       }
     }
 
@@ -1460,8 +1944,10 @@
       if (document.getElementById('mHighCnt')) document.getElementById('mHighCnt').textContent = rejected;
       if (document.getElementById('mActiveCnt')) document.getElementById('mActiveCnt').textContent = act;
       if (document.getElementById('mRejectedCnt')) document.getElementById('mRejectedCnt').textContent = rejected;
-      if (document.getElementById('mOfflineCnt')) document.getElementById('mOfflineCnt').textContent = q.length;
-      if (document.getElementById('queuedItemsCount')) document.getElementById('queuedItemsCount').textContent = q.length;
+      const myQ = (typeof getMyOfflineQueue === 'function') ? getMyOfflineQueue() : q;
+      if (document.getElementById('mOfflineCnt')) document.getElementById('mOfflineCnt').textContent = myQ.length;
+      if (document.getElementById('queuedItemsCount')) document.getElementById('queuedItemsCount').textContent = myQ.length;
+      if (typeof renderOfflineQueueList === 'function') renderOfflineQueueList();
 
       // آیتم مدیریت مجوزهای کاربران (صدور تیک تکی) فقط برای مدیر ارشد
       const drRe = document.getElementById('drawerAdminReactivate');
@@ -1815,7 +2301,7 @@
           closeReactivateModal();
           switchTabQuick('active');
           paint();
-          loadPermits();
+          refreshQuiet();
         } else {
           toast('خطا: ' + ((res && res.error) || 'ناشناخته'));
         }
@@ -2004,17 +2490,94 @@
        ============================================================ */
     function populateInternalUnitsDropdown() {
       const sel = document.getElementById('cpInternalUnit');
-      if (!sel) return;
-      sel.innerHTML = '';
-      internalUnitsList.forEach(u => sel.add(new Option(u, u)));
-      onInternalUnitChange();
+      if (sel) {
+        sel.innerHTML = '';
+        internalUnitsList.forEach(u => sel.add(new Option(u, u)));
+        onInternalUnitChange();
+      }
+      const req = document.getElementById('cpRequesterUnit');
+      if (req) {
+        const keep = req.value;
+        req.innerHTML = '';
+        internalUnitsList.forEach(u => req.add(new Option(u, u)));
+        if (keep) req.value = keep;
+        onReqInternalChange();
+      }
     }
     function populateContractorsDropdown() {
       const sel = document.getElementById('cpContractorCompany');
-      if (!sel) return;
-      sel.innerHTML = '';
-      contractorCompaniesList.forEach(c => sel.add(new Option(c, c)));
-      onContractorChange();
+      if (sel) {
+        sel.innerHTML = '';
+        contractorCompaniesList.forEach(c => sel.add(new Option(c, c)));
+        onContractorChange();
+      }
+      const reqc = document.getElementById('cpReqContractorCompany');
+      if (reqc) {
+        const keep = reqc.value;
+        reqc.innerHTML = '';
+        contractorCompaniesList.forEach(c => reqc.add(new Option(c, c)));
+        if (keep) reqc.value = keep;
+        onReqContractorChange();
+      }
+    }
+
+    function onReqTypeChange(){
+      const val = (document.querySelector('input[name="cpReqType"]:checked') || {}).value || 'internal';
+      const iw = document.getElementById('cpReqInternalWrap');
+      const cw = document.getElementById('cpReqContractorWrap');
+      if (val === 'internal') {
+        if(iw) iw.style.display = 'block';
+        if(cw) cw.style.display = 'none';
+        onReqInternalChange();
+      } else {
+        if(iw) iw.style.display = 'none';
+        if(cw) cw.style.display = 'block';
+        onReqContractorChange();
+      }
+      updateLivePreview();
+    }
+    function onReqInternalChange(){
+      const sel = document.getElementById('cpRequesterUnit');
+      const val = sel ? sel.value : '';
+      const mw = document.getElementById('cpReqMechWrap');
+      const ew = document.getElementById('cpReqElecWrap');
+      const uw = document.getElementById('cpReqCustomUnitWrap');
+      if(mw) mw.style.display = (val === 'مکانیک') ? 'block' : 'none';
+      if(ew) ew.style.display = (val === 'برق') ? 'block' : 'none';
+      if(uw) uw.style.display = (val === 'سایر') ? 'block' : 'none';
+      updateLivePreview();
+    }
+    function onReqContractorChange(){
+      const sel = document.getElementById('cpReqContractorCompany');
+      const val = sel ? sel.value : '';
+      const cw = document.getElementById('cpReqCustomCoWrap');
+      if(cw) cw.style.display = (val === 'سایر') ? 'block' : 'none';
+      updateLivePreview();
+    }
+    function getCombinedRequester(){
+      const type = (document.querySelector('input[name="cpReqType"]:checked') || {}).value || 'internal';
+      if (type === 'internal') {
+        const sel = document.getElementById('cpRequesterUnit');
+        let u = sel ? sel.value : '';
+        if (u === 'مکانیک') {
+          const sub = document.getElementById('cpReqMechSub') ? document.getElementById('cpReqMechSub').value : '';
+          u += ' (' + sub + ')';
+        } else if (u === 'برق') {
+          const sub = document.getElementById('cpReqElecSub') ? document.getElementById('cpReqElecSub').value : '';
+          u += ' (' + sub + ')';
+        } else if (u === 'سایر') {
+          const cust = document.getElementById('cpReqCustomUnitInput') ? document.getElementById('cpReqCustomUnitInput').value.trim() : '';
+          u = cust ? ('سایر: ' + cust) : 'سایر';
+        }
+        return 'واحد داخلی: ' + u;
+      }
+      const sel = document.getElementById('cpReqContractorCompany');
+      let c = sel ? sel.value : '';
+      if (c === 'سایر') {
+        const cust = document.getElementById('cpReqCustomCoInput') ? document.getElementById('cpReqCustomCoInput').value.trim() : '';
+        c = cust ? cust : 'سایر (پیمانکار)';
+      }
+      return 'پیمانکار: ' + c;
     }
     function onExecTypeChange() {
       const val = (document.querySelector('input[name="cpExecType"]:checked') || {}).value || 'internal';
@@ -2186,6 +2749,8 @@
        ============================================================ */
     function openCreatePermitModal(){
       if(!me || (!me.isAdmin && !me.canCreatePermit)){ toast('شما مجوز ثبت پرمیت را ندارید.'); return; }
+      const sub = document.getElementById('viewCreateSub');
+      if(sub && me) sub.textContent = (me.firstName||'') + ' ' + (me.lastName||'');
       
       // بدون شماره پیش‌فرض در زمان ثبت دستی پرمیت
       const pEl = document.getElementById('cpPermitNo');
@@ -2199,6 +2764,7 @@
       populateInternalUnitsDropdown();
       populateContractorsDropdown();
       onExecTypeChange();
+      if(typeof onReqTypeChange==='function') onReqTypeChange();
       onMainLocationChange();
 
       const descEl = document.getElementById('cpDesc');
@@ -2206,9 +2772,17 @@
 
       updateLivePreview();
       lockBodyScroll(true);
-      document.getElementById('createPermitModal').classList.add('show');
+      const vp = document.getElementById('viewCreate');
+      if(vp) vp.classList.add('show');
+      try { window.scrollTo(0,1); } catch(e){}
     }
-    function closeCreatePermitModal(){ lockBodyScroll(false); document.getElementById('createPermitModal').classList.remove('show'); }
+    function closeCreatePermitModal(){
+      lockBodyScroll(false);
+      const vp = document.getElementById('viewCreate');
+      if(vp) vp.classList.remove('show');
+      const old = document.getElementById('createPermitModal');
+      if(old) old.classList.remove('show');
+    }
 
     async function confirmCreatePermit(){
       if(!me) return;
@@ -2239,7 +2813,7 @@
       const type = (document.querySelector('input[name="cpWorkTypeRadio"]:checked') || {}).value || 'روتین';
       const desc = (document.getElementById('cpDesc').value||'').trim();
       const execObj = getCombinedExecutor();
-      const unit = execObj.unit;
+      const unit = (typeof getCombinedRequester === 'function') ? getCombinedRequester() : ((document.getElementById('cpRequesterUnit')||{}).value || execObj.unit);
       const contractor = execObj.contractor;
 
       if(!place){ toast('محل انجام کار الزامی است'); return; }
@@ -2285,7 +2859,7 @@
             if (cpEl) cpEl.value = '';
           }
           switchTabQuick('pending');
-          loadPermits();
+          refreshQuiet();
         } else if(res && res.offlineQueued){
           toast('⚠️ قطعی شبکه: پرمیت در صف آفلاین ذخیره شد.');
           closeCreatePermitModal();
@@ -2322,7 +2896,7 @@
       });
       if (res && res.ok) {
         toast('✅ ' + (res.message || 'پرمیت شماره ' + permitNo + ' با موفقیت حذف شد.'));
-        loadPermits();
+        refreshQuiet();
       } else {
         toast('❌ خطا در حذف پرمیت: ' + ((res && res.error) || 'خطای سرور'));
       }
@@ -2393,9 +2967,40 @@
           <div style="flex:1;min-width:0">
             <div style="font-weight:800;color:var(--d)">${esc(u.firstName||'—')} ${esc(u.lastName||'')} ${isSelf?'<span class="badge ok">شما</span>':''}</div>
             <div style="font-size:0.7rem;color:var(--muted)">کد: ${esc(u.code)} · ${statusTxt} · آخرین ورود: ${esc(u.lastLogin||'—')}</div>
+            ${(!isAdminUser && !isSelf) ? `<button class="btn ${u.status==='فعال'?'btn-x':'btn-g'} btn-sm" style="margin-top:6px;width:100%" onclick="toggleUserAccess('${esc(u.code)}', ${u.status==='فعال'?'false':'true'})">${u.status==='فعال'?'⛔ قطع دسترسی این کاربر':'✅ وصل مجدد دسترسی'}</button>` : ''}
             ${permBlock}
           </div>
         </div>`;
+    }
+
+
+    async function toggleUserAccess(targetCode, makeActive){
+      if(!me || !me.isAdmin){ toast('فقط مدیر ارشد می‌تواند دسترسی را قطع کند.'); return; }
+      const on = !!makeActive;
+      const msg = on
+        ? 'دسترسی این کاربر دوباره وصل شود؟'
+        : 'دسترسی این کاربر قطع شود؟ دیگر نمی‌تواند وارد سامانه شود.';
+      if(!confirm(msg)) return;
+      const key = 'acc_' + targetCode;
+      if(inFlightActionKeys.has(key)) return;
+      inFlightActionKeys.add(key);
+      try {
+        const res = await callAPI('setuseraccess', {
+          code: me.code,
+          targetCode: targetCode,
+          active: on
+        });
+        if(res && res.ok){
+          toast(res.message || (on?'وصل شد':'قطع شد'));
+          await loadUsers();
+        } else {
+          toast('خطا: ' + ((res && res.error) || 'ناشناخته'));
+        }
+      } catch(e){
+        toast('خطا در ارسال');
+      } finally {
+        inFlightActionKeys.delete(key);
+      }
     }
 
     function togglePermsPanel(code){
@@ -2444,14 +3049,27 @@
 
     function getSession(){
       try {
-        const s = localStorage.getItem(LS_SESSION) || sessionStorage.getItem(LS_SESSION);
-        return s ? JSON.parse(s) : null;
+        const keys = [LS_SESSION, 'ptw_lead_zinc_session_v2', 'ptw_lead_zinc_session_v1', 'ptw_session'];
+        for(let i=0;i<keys.length;i++){
+          const s = localStorage.getItem(keys[i]) || sessionStorage.getItem(keys[i]);
+          if(!s) continue;
+          const u = JSON.parse(s);
+          if(u && u.code){
+            if(keys[i] !== LS_SESSION){
+              try { localStorage.setItem(LS_SESSION, s); } catch(eM){}
+            }
+            return u;
+          }
+        }
+        return null;
       } catch(e) { return null; }
     }
 
     function setSession(u){
       try {
-        localStorage.setItem(LS_SESSION, JSON.stringify(u));
+        const s = JSON.stringify(u);
+        localStorage.setItem(LS_SESSION, s);
+        sessionStorage.setItem(LS_SESSION, s);
       } catch(e){}
     }
 
@@ -2459,11 +3077,20 @@
       try {
         localStorage.removeItem(LS_SESSION);
         sessionStorage.removeItem(LS_SESSION);
+        sessionStorage.removeItem(LS_GATE);
         localStorage.removeItem(LS_CACHE);
       } catch(e){}
     }
 
-    function showLogin(){ document.body.className = 'gate-on'; }
+    function showLogin(){
+      document.body.className = 'gate-on';
+      const ban = document.getElementById('offlineBanner');
+      if(ban) ban.classList.remove('show');
+      ['viewHistory','viewAnalyze'].forEach(function(id){
+        const el = document.getElementById(id);
+        if(el) el.classList.remove('show');
+      });
+    }
 
     function showApp(){
       document.body.className = '';
@@ -2594,7 +3221,13 @@
       return list;
     }
 
+    let paintRaf=0;
     function paint(){
+      if(paintRaf) cancelAnimationFrame(paintRaf);
+      paintRaf = requestAnimationFrame(paintNow);
+    }
+    function paintNow(){
+      paintRaf=0;
       const validRows = rows.filter(p => !isHeaderRecord(p));
 
       let act = 0, pending = 0, closed = 0, rejected = 0;
@@ -2655,7 +3288,7 @@
         const canAnalyzeP   = !!(me && (me.isAdmin || me.canAnalyze));
         const canReactP     = !!(me && (me.isAdmin || me.canReactivate));
         const deleteBtn = canDeleteP ? `<button class="btn" style="background:#ef4444;color:#fff;border:none" onclick="confirmDeletePermit('${esc(p.permitNo)}')">🗑️ حذف دائم</button>` : '';
-        const aiBtn = canAnalyzeP ? `<button class="btn btn-ai" onclick="openAIModal('${esc(p.permitNo)}')">🧠 تحلیل AI</button>` : '';
+        const aiBtn = canAnalyzeP ? `<button class="btn btn-ai" onclick="goAnalyzePage('${esc(p.permitNo)}')">🧠 تحلیل AI</button>` : '';
 
         let actionButtons = '';
 
@@ -2675,7 +3308,7 @@
             ${patrolBtn}
             ${closeBtn}
             ${aiBtn}
-            <button class="btn btn-w" onclick="openHistoryModal('${esc(p.permitNo)}')">📋 تاریخچه</button>
+            <button class="btn btn-w" onclick="goHistoryPage('${esc(p.permitNo)}')">📋 تاریخچه</button>
             ${deleteBtn}
           `;
         } else if(isRej) {
@@ -2691,7 +3324,7 @@
           const reBtn = canReactP ? `<button class="btn btn-p" onclick="openReactivateModal('${esc(p.permitNo)}')">🔄 تمدید و بازفعال‌سازی</button>` : '';
           actionButtons = `
             ${reBtn}
-            <button class="btn btn-w" onclick="openHistoryModal('${esc(p.permitNo)}')">📋 تاریخچه بازدیدها</button>
+            <button class="btn btn-w" onclick="goHistoryPage('${esc(p.permitNo)}')">📋 تاریخچه بازدیدها</button>
             ${aiBtn}
             ${deleteBtn}
           `;
@@ -2731,12 +3364,12 @@
 
     async function boot(){
       me = getSession();
-      if(!me){ showLogin(); return; }
+      if(!me || !me.code){ showLogin(); return; }
       showApp();
 
       // رفرش خودکار ممنوع! فقط اگر صف آفلاین واقعاً چیزی داشته باشد، ارسال شود
       window.addEventListener('online', function(){
-        if(getOfflineQueue().length > 0){
+        if(typeof getMyOfflineQueue === 'function' && getMyOfflineQueue().length > 0){
           processOfflineQueue();
         }
       });
@@ -2750,10 +3383,14 @@
         }
       } catch(e){}
 
-      // فقط یک بار دریافت اولیه (رفرش خودکار ممنوع)
-      setTimeout(loadPermits, 100);
+      // دریافت اولیه بی‌صدا (لیست از کش همین حالا دیده می‌شود)
+      setTimeout(async function(){
+        await probeChannels();
+        window.__silentRefresh = true;
+        loadPermits();
+      }, 50);
       // پردازش صف آفلاین فقط وقتی صف غیرخالی است
-      if(getOfflineQueue().length > 0){
+      if(typeof getMyOfflineQueue === 'function' && getMyOfflineQueue().length > 0){
         setTimeout(processOfflineQueue, 1000);
       }
     }
@@ -2785,7 +3422,7 @@
         };
         PERM_DEFS.forEach(function(d){ me[d.can] = !!data.user[d.can]; });
 
-        if(remember) setSession(me);
+        setSession(me);
 
         err.textContent = '';
         toast('✓ خوش آمدید: ' + me.firstName + ' ' + me.lastName);
@@ -2798,28 +3435,38 @@
 
     function doLogout(){
       if(!confirm('آیا قصد خروج از سامانه را دارید؟')){ return; }
+      me = null;
+      rows = [];
       clearAllLocal();
       showLogin();
       toast('از سیستم خارج شدید.');
     }
 
+    function refreshQuiet(){ window.__silentRefresh = true; loadPermits(); }
     async function loadPermits(){
       if(!me) return;
-      if(me && (me.isAdmin || me.canUnits || me.canCreatePermit) && typeof loadUnitsSettings === 'function') {
+      if(!unitsLoadedOnce && me && (me.isAdmin || me.canUnits || me.canCreatePermit) && typeof loadUnitsSettings === 'function') {
+        unitsLoadedOnce = true;
         loadUnitsSettings();
       }
+      if(loadPermitsBusy) return;
+      loadPermitsBusy = true;
 
-      if(typeof getOfflineQueue === 'function' && getOfflineQueue().length){
-        await processOfflineQueue();
+      if(!window.__silentRefresh){
+        try {
+          toast('🔄 پینگ ۱ ثانیه‌ای لایه‌ها...');
+          const pr = await probeChannels();
+          if(pr && pr.ok) toast('✓ وصل به ' + getLayerName(pr.layer) + ' — ' + pr.latency + 'ms');
+        } catch(eP){}
       }
-      
+
       const btnHeader = document.getElementById('headerRefreshBtn');
 
       if(btnHeader) btnHeader.classList.add('spinning');
       document.getElementById('dot').className = 'dot';
 
       try {
-        const data = await getAction8Layers({ action: 'permits', code: me.code, firstName: me.firstName, lastName: me.lastName }, 15000);
+        const data = await getAction8Layers({ action: 'permits', code: me.code, firstName: me.firstName, lastName: me.lastName }, 12000);
         if(data && data.active === false){
           toast('دسترسی شما معلق شده است.');
           clearAllLocal(); showLogin(); return;
@@ -2837,8 +3484,9 @@
           // نمایش نسخه سرور و هشدار اگر قدیمی باشد
           const srvVerEl = document.getElementById('srvVer');
           if(srvVerEl) srvVerEl.textContent = data.apiVersion || '?';
-          if(data.apiVersion && EXPECTED_API_VERSION && data.apiVersion !== EXPECTED_API_VERSION){
-            toast('⚠️ نسخه سرور (' + data.apiVersion + ') با برنامه (' + EXPECTED_API_VERSION + ') یکی نیست! حتماً Deployment جدید بسازید.');
+          if(data.apiVersion && EXPECTED_API_VERSION && data.apiVersion !== EXPECTED_API_VERSION && !window.__verWarned){
+            window.__verWarned = true;
+            toast('⚠️ نسخه سرور (' + data.apiVersion + ') با برنامه یکی نیست.');
           }
           const drCp2 = document.getElementById('drawerCreatePermit');
           if (drCp2) drCp2.style.display = (me.isAdmin || me.canCreatePermit) ? 'flex' : 'none';
@@ -2863,7 +3511,8 @@
 
         fillCo(); paint();
         document.getElementById('dot').className = 'dot on';
-        toast('✓ بروزرسانی موفق: ' + validRows.length + ' پرمیت دریافت شد.');
+        if(!window.__silentRefresh) toast('✓ بروزرسانی موفق: ' + validRows.length + ' پرمیت دریافت شد.');
+        window.__silentRefresh = false;
       } catch(e){
         document.getElementById('dot').className = 'dot err';
         const online = (typeof navigator !== 'undefined') ? navigator.onLine : true;
@@ -2882,6 +3531,7 @@
             'زمان: ' + new Date().toLocaleString());
         }
       } finally {
+        loadPermitsBusy = false;
         if(btnHeader) btnHeader.classList.remove('spinning');
       }
     }
@@ -2913,7 +3563,7 @@
 
         if(res && res.ok){
           toast('✅ پرمیت شماره ' + permitNo + ' با موفقیت در گوگل‌شیت فعال شد.');
-          loadPermits();
+          refreshQuiet();
         } else {
           toast('خطا در ثبت شیت: ' + (res.error || 'ناشناخته'));
         }
@@ -2974,7 +3624,7 @@
         if(res && res.ok){
           toast('❌ پرمیت شماره ' + currentRejectPermit.permitNo + ' رد شد و در گوگل‌شیت ثبت گردید.');
           closeRejectPermitModal();
-          loadPermits();
+          refreshQuiet();
         } else {
           toast('خطا: ' + (res.error || 'ناشناخته'));
         }
@@ -3093,7 +3743,7 @@
         if(res && res.ok){
           toast('✅ بازرسی مجدد انجام شد و وضعیت پرمیت به ' + targetStatus + ' تغییر یافت.');
           closeReinspectModal();
-          loadPermits();
+          refreshQuiet();
         } else {
           toast('خطا: ' + (res.error || 'ناشناخته'));
         }
@@ -3153,7 +3803,7 @@
         if(res && res.ok){
           toast('✓ پرمیت شماره ' + currentClosePermit.permitNo + ' در گوگل‌شیت بسته شد.');
           closeClosePermitModal();
-          loadPermits();
+          refreshQuiet();
         } else {
           toast('خطا: ' + (res.error || 'ناشناخته'));
         }
@@ -3238,6 +3888,7 @@
 
       currentPatrolPermit = p;
       currentPhotoBase64 = '';
+      currentPhotoList = [];
 
       document.getElementById('patrolPermitInfo').innerHTML = `
         <strong>شماره پرمیت: ${esc(p.permitNo)}</strong> | مجری: ${esc(getContractor(p))}<br>
@@ -3245,7 +3896,9 @@
       `;
 
       document.getElementById('patrolNotes').value = '';
-      document.getElementById('photoPreview').style.display = 'none';
+      document.querySelectorAll('.patrol-chk').forEach(function(c){ c.checked = false; });
+      const pg = document.getElementById('photoPreviewGrid');
+      if(pg) pg.innerHTML = '';
       document.getElementById('patrolPhotoInput').value = '';
       const cpa = document.getElementById('closePermitAlso');
       if (cpa) { cpa.checked = false; if (cpa.parentElement) cpa.parentElement.style.display = (me && (me.isAdmin || me.canClose)) ? 'flex' : 'none'; }
@@ -3256,57 +3909,62 @@
 
     function closePatrolModal(){ lockBodyScroll(false); document.getElementById('patrolModal').classList.remove('show'); }
 
-    function handlePatrolPhotoSelect(input){
-      if(!input.files || !input.files[0]) return;
-      const file = input.files[0];
-
-      const reader = new FileReader();
-      reader.onload = function(e){
-        const img = new Image();
-        img.onload = function(){
-          // کاهش حجم عکس: ابتدا ابعاد به ۱۰۲۴، سپس کیفیت را تا رسیدن به ~۵۰۰KB کم می‌کنیم
-          const canvas = document.createElement('canvas');
-          let w = img.width, h = img.height, maxDim = 1024;
-
-          if(w > maxDim || h > maxDim){
-            if(w > h){ h = Math.round((h * maxDim) / w); w = maxDim; }
-            else { w = Math.round((w * maxDim) / h); h = maxDim; }
-          }
-
-          canvas.width = w; canvas.height = h;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0, w, h);
-
-          // کیفیت تطبیقی: از ۰.۸ شروع، هر بار ۰.۰۵ کم کن تا حجم ≤ ~500KB شود (حداقل ۰.۴)
-          let quality = 0.8;
-          let dataUrl = canvas.toDataURL('image/jpeg', quality);
-          while(dataUrl.length > 500 * 1024 * 1.37 && quality > 0.4){   // base64 ≈ 1.37× حجم واقعی
-            quality -= 0.05;
-            dataUrl = canvas.toDataURL('image/jpeg', quality);
-          }
-          // اگر هنوز بزرگ بود، ابعاد را هم کم کن
-          let scaleFactor = 1;
-          while(dataUrl.length > 500 * 1024 * 1.37 && scaleFactor > 0.5){
-            scaleFactor -= 0.1;
-            const nw = Math.round(w * scaleFactor), nh = Math.round(h * scaleFactor);
-            canvas.width = nw; canvas.height = nh;
-            ctx.drawImage(img, 0, 0, nw, nh);
-            dataUrl = canvas.toDataURL('image/jpeg', Math.max(quality, 0.5));
-          }
-
-          currentPhotoBase64 = dataUrl;
-          // نمایش حجم تقریبی به کاربر
-          const sizeKB = Math.round(dataUrl.length * 0.75 / 1024);
-          const kbLabel = document.getElementById('photoSizeLabel');
-          if(kbLabel) kbLabel.textContent = '📦 حجم: ~' + sizeKB + 'KB';
-
-          const preview = document.getElementById('photoPreview');
-          preview.src = currentPhotoBase64;
-          preview.style.display = 'block';
+    function compressImageFile(file){
+      return new Promise(function(resolve){
+        const reader = new FileReader();
+        reader.onload = function(e){
+          const img = new Image();
+          img.onload = function(){
+            const canvas = document.createElement('canvas');
+            let w = img.width, h = img.height, maxDim = 960;
+            if(w > maxDim || h > maxDim){
+              if(w > h){ h = Math.round((h * maxDim) / w); w = maxDim; }
+              else { w = Math.round((w * maxDim) / h); h = maxDim; }
+            }
+            canvas.width = w; canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, w, h);
+            let quality = 0.72;
+            let dataUrl = canvas.toDataURL('image/jpeg', quality);
+            while(dataUrl.length > 280 * 1024 * 1.37 && quality > 0.38){
+              quality -= 0.07;
+              dataUrl = canvas.toDataURL('image/jpeg', quality);
+            }
+            resolve(dataUrl);
+          };
+          img.onerror = function(){ resolve(''); };
+          img.src = e.target.result;
         };
-        img.src = e.target.result;
-      };
-      reader.readAsDataURL(file);
+        reader.onerror = function(){ resolve(''); };
+        reader.readAsDataURL(file);
+      });
+    }
+    function renderPhotoGrid(){
+      const grid = document.getElementById('photoPreviewGrid');
+      const lab = document.getElementById('photoSizeLabel');
+      if(!grid) return;
+      grid.innerHTML = currentPhotoList.map(function(src, i){
+        return '<div style="position:relative;width:72px;height:72px"><img src="'+src+'" style="width:72px;height:72px;object-fit:cover;border-radius:8px"/><button type="button" onclick="removePatrolPhoto('+i+')" style="position:absolute;top:-6px;left:-6px;border:none;background:#ef4444;color:#fff;border-radius:50%;width:20px;height:20px;font-size:12px;cursor:pointer">×</button></div>';
+      }).join('');
+      if(lab) lab.textContent = currentPhotoList.length + ' از ۵ عکس آماده ارسال';
+    }
+    function removePatrolPhoto(i){
+      currentPhotoList.splice(i,1);
+      currentPhotoBase64 = currentPhotoList[0] || '';
+      renderPhotoGrid();
+    }
+    async function handlePatrolPhotoSelect(input){
+      if(!input.files || !input.files.length) return;
+      const room = 5 - currentPhotoList.length;
+      if(room <= 0){ toast('حداکثر ۵ عکس'); input.value=''; return; }
+      const files = Array.from(input.files).slice(0, room);
+      for(let i=0;i<files.length;i++){
+        const dataUrl = await compressImageFile(files[i]);
+        if(dataUrl) currentPhotoList.push(dataUrl);
+      }
+      currentPhotoBase64 = currentPhotoList[0] || '';
+      renderPhotoGrid();
+      input.value = '';
     }
 
     async function submitPatrolVisit(){
@@ -3315,6 +3973,14 @@
 
       const key = 'patrol_' + currentPatrolPermit.permitNo;
       if (inFlightActionKeys.has(key)) return;
+      const alreadyQ = getMyOfflineQueue().some(function(x){
+        return String(x.action||'').toLowerCase().indexOf('patrol')!==-1 && String(x.permitNo)===String(currentPatrolPermit.permitNo);
+      });
+      if(alreadyQ){
+        toast('⚠️ گشت این پرمیت از قبل در صف آفلاین است. دوباره عکس نفرستید؛ از منو صف را ارسال کنید.');
+        openOfflineSyncModal();
+        return;
+      }
 
       const btn = document.getElementById('btnSubmitPatrol');
       btn.disabled = true;
@@ -3345,7 +4011,8 @@
         itemsText: 'چک‌لیست HSE سرب و روی: ' + scoreText,
         inspectorName: me.firstName + ' ' + me.lastName,
         inspectorCode: me.code,
-        photoBase64: currentPhotoBase64,
+        photoBase64: currentPhotoList[0] || currentPhotoBase64 || '',
+        photosBase64: currentPhotoList,
         closePermitAlso: closePermitAlso
       };
 
@@ -3354,7 +4021,7 @@
         if(res && res.ok){
           toast('✓ بازدید گشت ثبت شد' + (closePermitAlso ? ' و پرمیت بسته شد.' : ' و عکس به Google Drive منتقل گردید.'));
           closePatrolModal();
-          loadPermits();
+          refreshQuiet();
         } else {
           toast('خطا در ثبت: ' + (res.error || 'ناشناخته'));
         }
@@ -3514,7 +4181,7 @@
       closeSecondaryMirrorModal();
     }
 
-    function openOfflineSyncModal(){ document.getElementById('offlineSyncModal').classList.add('show'); }
+    function openOfflineSyncModal(){ renderOfflineQueueList(); document.getElementById('offlineSyncModal').classList.add('show'); }
     function closeOfflineSyncModal(){ document.getElementById('offlineSyncModal').classList.remove('show'); }
 
     function exportOfflineData(){
@@ -3652,6 +4319,8 @@
        - وگرنه رفتار عادی (خروج) حفظ می‌شود
        ============================================================ */
     const OVERLAY_CLOSERS = {
+      viewHistory: function(){ closeLocalView('viewHistory'); },
+      viewAnalyze: function(){ closeLocalView('viewAnalyze'); },
       patrolModal: closePatrolModal,
       aiModal: closeAIModal,
       historyModal: closeHistoryModal,
@@ -3667,21 +4336,22 @@
       helpModal: closeHelpModal,
       tableModal: closeTable,
       photoViewerModal: closePhotoViewerModal,
+      errorModal: closeErrorModal,
+      viewCreate: closeCreatePermitModal,
+      createPermitModal: closeCreatePermitModal,
+      unitsManagerModal: closeUnitsManagerModal,
       drawer: closeDrawer
     };
     let __overlayHistoryArmed = false;
+    let __overlayDepth = 0;
     let __closingViaBack = false;
+    let __ignorePopCount = 0;
+    let __exitArmed = false;
+    let __backHookReady = false;
 
-    /* از آنجا که اکنون خودِ صفحه واقعاً اسکرول می‌شود (نه یک div داخلی)،
-       باید وقتی مودال/منو باز است از اسکرول‌خوردن پس‌زمینه جلوگیری کنیم؛
-       وگرنه با کشیدن روی مودال، صفحه‌ی پشتِ آن حرکت می‌کند. */
     let __bodyLocked = false;
     function __lockBodyScroll(){
       if(__bodyLocked) return;
-      // عمداً از overflow:hidden استفاده می‌کنیم نه position:fixed، چون position:fixed
-      // باعث می‌شود window.scrollY موقتاً دقیقاً صفر شود و همین می‌تواند در همان لحظه
-      // Pull-to-Refresh نیتیو را دوباره فعال کند. با overflow:hidden مقدار اسکرول
-      // دست‌نخورده باقی می‌ماند و فقط از حرکتِ بیشتر جلوگیری می‌شود.
       document.documentElement.style.overflow = 'hidden';
       document.body.style.overflow = 'hidden';
       __bodyLocked = true;
@@ -3693,42 +4363,111 @@
       __bodyLocked = false;
     }
 
+    function __openOverlayCount(){
+      return document.querySelectorAll('.modal.show, .drawer.show, .view-page.show').length;
+    }
+    function __topOverlay(){
+      const open = document.querySelectorAll('.modal.show, .drawer.show, .view-page.show');
+      if(!open.length) return null;
+      let top = open[0];
+      let z = parseInt(window.getComputedStyle(top).zIndex, 10) || 0;
+      for(let i=1;i<open.length;i++){
+        const zi = parseInt(window.getComputedStyle(open[i]).zIndex, 10) || 0;
+        if(zi >= z){ z = zi; top = open[i]; }
+      }
+      return top;
+    }
     function __syncOverlayHistory(){
-      const anyOpen = document.querySelectorAll('.modal.show, .drawer.show').length > 0;
-      if(anyOpen){ __lockBodyScroll(); } else { __unlockBodyScroll(); }
-      if(anyOpen && !__overlayHistoryArmed){
-        try { history.pushState({__ptw:'1'}, ''); } catch(e){}
-        __overlayHistoryArmed = true;
-      } else if(!anyOpen && __overlayHistoryArmed){
-        __overlayHistoryArmed = false;
-        // اگر مودال با دکمه «بستن» (نه دکمه برگشت گوشی) بسته شده، رکورد اضافه‌شده‌ی
-        // تاریخچه را همین‌جا پاک می‌کنیم؛ وگرنه دکمه برگشت سخت‌افزاری گوشی چند بار
-        // «خالی» عمل می‌کند (بدون هیچ اثر قابل مشاهده) قبل از این‌که واقعاً کار کند.
-        if(!__closingViaBack){
-          try { history.back(); } catch(e){}
-        }
+      const n = __openOverlayCount();
+      if(n>0){ __lockBodyScroll(); } else { __unlockBodyScroll(); }
+      __overlayDepth = n;
+      __overlayHistoryArmed = n > 0;
+    }
+
+    function closeTopOverlay(){
+      const top = __topOverlay();
+      if(!top) return false;
+      __closingViaBack = true;
+      const closer = OVERLAY_CLOSERS[top.id];
+      if(closer) closer();
+      else top.classList.remove('show');
+      __closingViaBack = false;
+      __overlayDepth = __openOverlayCount();
+      __overlayHistoryArmed = __overlayDepth > 0;
+      if(__overlayDepth>0) __lockBodyScroll(); else __unlockBodyScroll();
+      return true;
+    }
+
+    function armBackHook(){
+      try { history.pushState({__ptw:1}, ''); } catch(e){}
+      __backHookReady = true;
+    }
+
+    function phoneBack(){
+      if(closeTopOverlay()){
+        armBackHook();
+        return true;
+      }
+      if(!__exitArmed){
+        __exitArmed = true;
+        if(typeof toast==='function') toast('برای خروج دوباره دکمه برگشت گوشی را بزنید');
+        setTimeout(function(){ __exitArmed = false; }, 1800);
+        armBackHook();
+        return true;
+      }
+      return false;
+    }
+
+    function onPhonePopState(){
+      if(__ignorePopCount > 0){
+        __ignorePopCount--;
+        return;
+      }
+      const consumed = phoneBack();
+      if(consumed){
+        try { history.pushState({__ptw:1}, ''); } catch(e){}
       }
     }
 
-    window.addEventListener('popstate', function(){
-      const open = document.querySelectorAll('.modal.show, .drawer.show');
-      if(open.length){
-        __closingViaBack = true;
-        const top = open[open.length - 1];
-        const closer = OVERLAY_CLOSERS[top.id];
-        if(closer) closer();
-        __closingViaBack = false;
+    window.addEventListener('popstate', onPhonePopState);
+
+    document.addEventListener('keydown', function(e){
+      if(e.key === 'Escape' || e.keyCode === 27){
+        if(__topOverlay()){
+          e.preventDefault();
+          phoneBack();
+        }
       }
-      __overlayHistoryArmed = false;
     });
 
+    (function hookNativeBack(){
+      try {
+        if(window.WTN){
+          if(typeof window.WTN.onBackPressed === 'function'){
+            window.WTN.onBackPressed(function(){ return phoneBack(); });
+          }
+          if(typeof window.WTN.setBackHandler === 'function'){
+            window.WTN.setBackHandler(function(){ return phoneBack(); });
+          }
+        }
+      } catch(e){}
+      document.addEventListener('backbutton', function(e){
+        if(phoneBack()){ try { e.preventDefault(); } catch(e2){} }
+      }, false);
+    })();
+
     (function(){
-      const targets = document.querySelectorAll('.modal, .drawer');
+      const targets = document.querySelectorAll('.modal, .drawer, .view-page');
       const obs = new MutationObserver(function(){ __syncOverlayHistory(); });
       targets.forEach(function(el){ obs.observe(el, { attributes: true, attributeFilter: ['class'] }); });
     })();
 
-    // ===== غیرفعال کردن Pull-to-Refresh در اپ webintoapp (WebToNative) =====
+    window.addEventListener('load', function(){
+      try { history.replaceState({__ptw:0}, ''); } catch(e){}
+      armBackHook();
+    });
+
+    // ===== غیرفعال کردن Pull-to-Refresh    // ===== غیرفعال کردن Pull-to-Refresh در اپ webintoapp (WebToNative) =====
     // اگر اپ از موتور WebToNative ساخته شده باشد، با این API رفرش کشیدن خاموش می‌شود
     (function(){
       function disableWtnPullRefresh(){
@@ -3749,5 +4488,5 @@
 
     window.onload = boot;
   </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a295da3c7c355b2c',t:'MTc4NjQzNjc1NQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</body>
 </html>
