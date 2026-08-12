@@ -2291,15 +2291,15 @@
           }
           const lp = rows.find(x => String(x.permitNo).trim() === String(res.permitNo || currentReactivatePermit.permitNo).trim());
           if(lp){
-            lp.permitStatus = 'فعال';
+            lp.permitStatus = (res.newStatus || 'در انتظار تایید');
             if(res.endDate) lp.endDate = res.endDate;
             if(res.endTime) lp.endTime = res.endTime;
             if(res.extendCount != null) lp.reactCount = res.extendCount;
             if(res.reactivatedBy) lp.reactivatedBy = res.reactivatedBy;
           }
-          toast('✅ ' + (res.message || 'پرمیت با موفقیت تمدید شد.'));
+          toast('✅ ' + (res.message || 'پرمیت تمدید شد و به انتظار تأیید رفت.'));
           closeReactivateModal();
-          switchTabQuick('active');
+          switchTabQuick('pending');
           paint();
           refreshQuiet();
         } else {
@@ -2339,7 +2339,7 @@
       'الکترو کویر', 'پیمانکاری جلال مرادی', 'سایر'
     ];
 
-    const LOCATION_HIERARCHY = {
+    let LOCATION_HIERARCHY = {
       "فلوتاسیون": ["شمال", "جنوب", "شرق", "غرب", "سلول ۱۴", "سلول‌های ۲۴۲۱/۲۴۲۲/۳۱.FC", "سایر"],
       "بالمیل": ["جلو", "پشت", "زیر", "شمال", "جنوب", "غرب", "بالمیل-سیکلون", "بالمیل-اپرون", "سایر"],
       "دیواترینگ/آبگیری": ["فیلترپرس", "دیسک فیلتر", "دیواترینگ-فیلترپرس", "دیواترینگ-تیکنر", "دیواترینگ نیروگاه", "سایر"],
@@ -2355,12 +2355,28 @@
       "سایر": ["عمومی", "سایر"]
     };
 
+
+    function applyPlacesToCreateForm(mains){
+      const mainSel = document.getElementById('cpMainLocation');
+      if(!mainSel || !mains || !mains.length) return;
+      const cur = mainSel.value;
+      mainSel.innerHTML = '';
+      mains.forEach(function(m, i){
+        mainSel.add(new Option((i+1) + '. ' + m, m));
+      });
+      if(cur && mains.indexOf(cur)!==-1) mainSel.value = cur;
+      if(typeof onMainLocationChange === 'function') onMainLocationChange();
+    }
     async function loadUnitsSettings() {
       try {
         const res = await callAPI('getunitssettings', { action: 'getunitssettings' });
         if (res && res.ok) {
           if (res.units && res.units.length) internalUnitsList = res.units;
           if (res.contractors && res.contractors.length) contractorCompaniesList = res.contractors;
+          if (res.places && typeof res.places === 'object') {
+            LOCATION_HIERARCHY = res.places;
+            applyPlacesToCreateForm(res.placeMains || Object.keys(res.places));
+          }
         }
       } catch(e) {}
     }
@@ -4488,5 +4504,5 @@
 
     window.onload = boot;
   </script>
-</body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a29f97b668f4d09a',t:'MTc4NjUzODg4OA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
