@@ -2159,6 +2159,9 @@
 
     let lastErrorDetail = '';
     function showError(title, detail){
+      if(window.__appSleeping || (typeof document !== 'undefined' && (document.hidden || document.visibilityState === 'hidden'))){
+        return;
+      }
       lastErrorDetail = detail;
       document.getElementById('errorDetail').textContent = detail;
       lockBodyScroll(true);
@@ -3930,25 +3933,125 @@
     }
 
 
+    const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
     function xmlEscCell(s){
       return String(s == null ? '' : s)
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g,'')
         .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
-    function excelXmlFromAoa(aoa, sheetName){
-      let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
-      xml += '<?mso-application progid="Excel.Sheet"?>\n';
-      xml += '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">\n';
-      xml += '<Worksheet ss:Name="'+xmlEscCell(sheetName||'پرمیت')+'"><Table>\n';
-      for(let i=0;i<aoa.length;i++){
-        xml += '<Row>';
-        const row = aoa[i] || [];
-        for(let c=0;c<row.length;c++){
-          xml += '<Cell><Data ss:Type="String">'+xmlEscCell(row[c])+'</Data></Cell>';
+    function utf8Bytes(str){
+      const s = String(str == null ? '' : str);
+      if(window.TextEncoder) return new TextEncoder().encode(s);
+      const out = [];
+      for(let i=0;i<s.length;i++){
+        let c = s.charCodeAt(i);
+        if(c < 0x80) out.push(c);
+        else if(c < 0x800){ out.push(0xC0|(c>>6), 0x80|(c&63)); }
+        else if(c >= 0xD800 && c <= 0xDBFF && i+1<s.length){
+          const c2 = s.charCodeAt(++i);
+          const u = 0x10000 + ((c-0xD800)<<10) + (c2-0xDC00);
+          out.push(0xF0|(u>>18), 0x80|((u>>12)&63), 0x80|((u>>6)&63), 0x80|(u&63));
+        } else {
+          out.push(0xE0|(c>>12), 0x80|((c>>6)&63), 0x80|(c&63));
         }
-        xml += '</Row>\n';
       }
-      xml += '</Table></Worksheet></Workbook>';
-      return xml;
+      return new Uint8Array(out);
+    }
+    const __CRC_TABLE = (function(){
+      const t = new Uint32Array(256);
+      for(let n=0;n<256;n++){
+        let c = n;
+        for(let k=0;k<8;k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        t[n] = c >>> 0;
+      }
+      return t;
+    })();
+    function crc32Bytes(u8){
+      let c = 0xFFFFFFFF;
+      for(let i=0;i<u8.length;i++) c = __CRC_TABLE[(c ^ u8[i]) & 0xFF] ^ (c >>> 8);
+      return (c ^ 0xFFFFFFFF) >>> 0;
+    }
+    function zipStore(files){
+      const parts = [];
+      const central = [];
+      let offset = 0;
+      function pushU32(arr, n){ arr.push(n&255,(n>>>8)&255,(n>>>16)&255,(n>>>24)&255); }
+      function pushU16(arr, n){ arr.push(n&255,(n>>>8)&255); }
+      files.forEach(function(f){
+        const name = utf8Bytes(f.name);
+        const data = (f.data instanceof Uint8Array) ? f.data : utf8Bytes(f.data || '');
+        const crc = crc32Bytes(data);
+        const local = [];
+        pushU32(local, 0x04034b50);
+        pushU16(local, 20); pushU16(local, 0); pushU16(local, 0);
+        pushU16(local, 0); pushU16(local, 0);
+        pushU32(local, crc); pushU32(local, data.length); pushU32(local, data.length);
+        pushU16(local, name.length); pushU16(local, 0);
+        const locU8 = new Uint8Array(local.length + name.length + data.length);
+        locU8.set(local, 0); locU8.set(name, local.length); locU8.set(data, local.length + name.length);
+        parts.push(locU8);
+        const cen = [];
+        pushU32(cen, 0x02014b50);
+        pushU16(cen, 20); pushU16(cen, 20); pushU16(cen, 0); pushU16(cen, 0);
+        pushU16(cen, 0); pushU16(cen, 0);
+        pushU32(cen, crc); pushU32(cen, data.length); pushU32(cen, data.length);
+        pushU16(cen, name.length); pushU16(cen, 0); pushU16(cen, 0);
+        pushU16(cen, 0); pushU16(cen, 0); pushU32(cen, 0); pushU32(cen, offset);
+        const cenU8 = new Uint8Array(cen.length + name.length);
+        cenU8.set(cen, 0); cenU8.set(name, cen.length);
+        central.push(cenU8);
+        offset += locU8.length;
+      });
+      let cenSize = 0; central.forEach(function(c){ cenSize += c.length; });
+      const end = [];
+      pushU32(end, 0x06054b50); pushU16(end, 0); pushU16(end, 0);
+      pushU16(end, files.length); pushU16(end, files.length);
+      pushU32(end, cenSize); pushU32(end, offset); pushU16(end, 0);
+      const total = offset + cenSize + end.length;
+      const out = new Uint8Array(total);
+      let p = 0;
+      parts.forEach(function(x){ out.set(x, p); p += x.length; });
+      central.forEach(function(x){ out.set(x, p); p += x.length; });
+      out.set(end, p);
+      return out;
+    }
+    function aoaToXlsxBlob(aoa){
+      const rowsXml = (aoa||[]).map(function(row, r){
+        const cells = (row||[]).map(function(val, c){
+          const ref = String.fromCharCode(65 + c) + (r + 1);
+          return '<c r="'+ref+'" t="inlineStr"><is><t xml:space="preserve">'+xmlEscCell(val)+'</t></is></c>';
+        }).join('');
+        return '<row r="'+(r+1)+'">'+cells+'</row>';
+      }).join('');
+      const sheet = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'+
+        '<sheetData>'+rowsXml+'</sheetData></worksheet>';
+      const workbook = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'+
+        '<sheets><sheet name="Permit" sheetId="1" r:id="rId1"/></sheets></workbook>';
+      const wbRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'+
+        '</Relationships>';
+      const rels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'+
+        '</Relationships>';
+      const types = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'+
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'+
+        '<Default Extension="xml" ContentType="application/xml"/>'+
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'+
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'+
+        '</Types>';
+      const bytes = zipStore([
+        { name:'[Content_Types].xml', data: types },
+        { name:'_rels/.rels', data: rels },
+        { name:'xl/workbook.xml', data: workbook },
+        { name:'xl/_rels/workbook.xml.rels', data: wbRels },
+        { name:'xl/worksheets/sheet1.xml', data: sheet }
+      ]);
+      return new Blob([bytes], { type: XLSX_MIME });
     }
     function localPermitsAoa(){
       const header = ['ردیف','تاریخ شروع','ساعت شروع','محل کار','نوع کار','شرح کار','واحد درخواست‌کننده','تاریخ اتمام','ساعت اتمام','رد فنی','تأیید فنی','علت توقف','شماره پرمیت','مجری','وضعیت'];
@@ -3975,78 +4078,80 @@
       });
       return aoa;
     }
-    function b64ToBlob(b64, mime){
-      const bin = atob(String(b64||'').replace(/\s/g,''));
-      const arr = new Uint8Array(bin.length);
-      for(let i=0;i<bin.length;i++) arr[i] = bin.charCodeAt(i);
-      return new Blob([arr], { type: mime || 'application/vnd.ms-excel' });
+    function asciiExportName(){
+      const d = new Date();
+      const p = function(n){ return (n<10?'0':'')+n; };
+      return 'PTW_permits_'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'_'+p(d.getHours())+p(d.getMinutes())+'.xlsx';
     }
     function saveExcelFile(blob, fileName){
-      const name = fileName || ('permits_'+Date.now()+'.xls');
+      const name = /\.xlsx$/i.test(fileName||'') ? fileName : asciiExportName();
+      const file = (typeof File === 'function')
+        ? new File([blob], name, { type: XLSX_MIME })
+        : blob;
       try {
         const W = window.WTN || window.WebToNative || window.wtn || null;
         if(W){
-          const url = URL.createObjectURL(blob);
-          if(typeof W.downloadFile === 'function'){ W.downloadFile({ url: url, fileName: name, filename: name }); return true; }
-          if(typeof W.saveFile === 'function'){ W.saveFile({ url: url, fileName: name, filename: name }); return true; }
-          if(typeof W.share === 'function'){ W.share({ url: url, fileName: name, title: name }); }
+          if(typeof W.saveFile === 'function'){
+            const reader = new FileReader();
+            reader.onload = function(){
+              try { W.saveFile({ fileName: name, filename: name, mime: XLSX_MIME, mimeType: XLSX_MIME, base64: String(reader.result||'').split(',')[1], data: reader.result }); } catch(e){}
+            };
+            reader.readAsDataURL(file);
+            return true;
+          }
+          if(typeof W.downloadFile === 'function'){
+            const url = URL.createObjectURL(file);
+            W.downloadFile({ url: url, fileName: name, filename: name, mimeType: XLSX_MIME, mime: XLSX_MIME });
+            return true;
+          }
+          if(typeof W.shareFile === 'function'){
+            W.shareFile({ fileName: name, mimeType: XLSX_MIME, blob: file });
+            return true;
+          }
         }
       } catch(eW){}
       try {
+        if(navigator.share && navigator.canShare && navigator.canShare({ files: [file] })){
+          navigator.share({ files: [file], title: name }).catch(function(){});
+          return true;
+        }
+      } catch(eS){}
+      try {
         if(window.navigator && window.navigator.msSaveOrOpenBlob){
-          window.navigator.msSaveOrOpenBlob(blob, name);
+          window.navigator.msSaveOrOpenBlob(file, name);
           return true;
         }
       } catch(eM){}
       try {
-        const url = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(file);
         const a = document.createElement('a');
         a.href = url;
         a.download = name;
+        a.setAttribute('download', name);
         a.rel = 'noopener';
+        a.target = '_self';
         a.style.display = 'none';
         document.body.appendChild(a);
         a.click();
-        setTimeout(function(){ try { document.body.removeChild(a); URL.revokeObjectURL(url); } catch(e){} }, 2500);
+        setTimeout(function(){ try { document.body.removeChild(a); URL.revokeObjectURL(url); } catch(e){} }, 4000);
         return true;
       } catch(eA){}
-      try {
-        const reader = new FileReader();
-        reader.onload = function(){
-          const a = document.createElement('a');
-          a.href = reader.result;
-          a.download = name;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-        };
-        reader.readAsDataURL(blob);
-        return true;
-      } catch(eD){}
       return false;
     }
     async function exportPermitsExcel(){
       if(!me || !(me.isAdmin || me.canExport)){ toast('⛔ مجوز «خروجی اکسل» ندارید.'); return; }
-      toast('⏳ در حال ساخت فایل اکسل (ستون A تا O)...');
-      const localName = 'خروجی_پرمیت_A-O_' + String(Date.now()) + '.xls';
-      try{
-        const res = await callAPI('exportpermits', { code: me.code }, 25000);
-        if(res && res.ok && res.xlsBase64){
-          const blob = b64ToBlob(res.xlsBase64, 'application/vnd.ms-excel');
-          saveExcelFile(blob, res.fileName || localName);
-          toast('✅ فایل اکسل ذخیره شد' + (res.rows!=null?(' — '+res.rows+' ردیف'):''));
-          return;
-        }
-      }catch(e){}
+      toast('⏳ در حال ساخت فایل Excel واقعی (.xlsx)...');
+      const name = asciiExportName();
       try {
+        try { callAPI('exportpermits', { code: me.code }, 20000); } catch(eA){}
         const aoa = localPermitsAoa();
         if(aoa.length < 2){ toast('داده‌ای برای خروجی نیست. اول لیست را بروزرسانی کنید.'); return; }
-        const xml = excelXmlFromAoa(aoa, 'پرمیت');
-        const blob = new Blob([xml], { type: 'application/vnd.ms-excel' });
-        saveExcelFile(blob, localName);
-        toast('✅ فایل اکسل از داده همین گوشی ساخته شد — ' + (aoa.length-1) + ' ردیف');
+        const blob = aoaToXlsxBlob(aoa);
+        const ok = saveExcelFile(blob, name);
+        if(ok) toast('✅ فایل '+name+' آماده شد — '+(aoa.length-1)+' ردیف. با Excel یا Sheets باز کنید.');
+        else toast('فایل ساخته شد ولی ذخیره خودکار گوشی رد شد. دوباره تلاش کنید.');
       } catch(e2){
-        toast('خطا در ساخت فایل اکسل روی گوشی');
+        toast('خطا در ساخت xlsx روی گوشی');
       }
     }
 
@@ -4082,9 +4187,33 @@
         setTimeout(processOfflineQueue, 1000);
       }
       setTimeout(function(){ logAppCheck('open'); loadHseCatalog(); }, 400);
+      window.__appSleeping = false;
       document.addEventListener('visibilitychange', function(){
-        if(document.visibilityState === 'visible') logAppCheck('resume');
+        if(document.visibilityState !== 'visible'){
+          window.__appSleeping = true;
+          window.__silentRefresh = true;
+          return;
+        }
+        window.__appSleeping = false;
+        window.__silentRefresh = true;
+        logAppCheck('resume');
       });
+      window.addEventListener('pagehide', function(){ window.__appSleeping = true; });
+      window.addEventListener('freeze', function(){ window.__appSleeping = true; });
+      window.addEventListener('pageshow', function(){
+        window.__appSleeping = false;
+        window.__silentRefresh = true;
+      });
+      window.addEventListener('unhandledrejection', function(ev){
+        if(window.__appSleeping || (document && document.hidden)){
+          try { ev.preventDefault(); } catch(e){}
+        }
+      });
+      window.addEventListener('error', function(ev){
+        if(window.__appSleeping || (document && document.hidden)){
+          try { ev.preventDefault(); } catch(e){}
+        }
+      }, true);
     }
 
     async function doLogin(){
@@ -4216,21 +4345,16 @@
         window.__silentRefresh = false;
       } catch(e){
         document.getElementById('dot').className = 'dot err';
+        const hidden = (typeof document !== 'undefined') && (document.hidden || document.visibilityState === 'hidden');
         const online = (typeof navigator !== 'undefined') ? navigator.onLine : true;
-        const msg = online ? 'سرور در دسترس نیست' : 'اینترنت گوشی قطع است';
         if (rows && rows.length) {
-          fillCo(); paint();
-          toast('⚠️ ' + msg + '؛ اطلاعات محلی رندر شد.');
-        } else {
-          toast('⚠️ ' + msg + '.');
-          showError('⚠️ ' + msg,
-            'عملیات: بارگذاری پرمیت‌ها\n' +
-            'آدرس: ' + primaryApiUrl() + '\n' +
-            'اینترنت گوشی: ' + (online ? 'وصل' : 'قطع') + '\n' +
-            'نسخه فایل: ' + APP_FILE_VERSION + '\n' +
-            'خطا: ' + (e.message || e) + '\n' +
-            'زمان: ' + new Date().toLocaleString());
+          try { fillCo(); paint(); } catch(eP){}
         }
+        if(!(hidden || window.__appSleeping)){
+          const msg = online ? 'سرور در دسترس نیست' : 'اینترنت گوشی قطع است';
+          toast('⚠️ ' + msg + (rows && rows.length ? '؛ لیست قبلی روی گوشی ماند.' : '.'));
+        }
+        window.__silentRefresh = false;
       } finally {
         loadPermitsBusy = false;
         if(btnHeader) btnHeader.classList.remove('spinning');
