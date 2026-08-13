@@ -270,8 +270,8 @@
     .wrap { padding: 12px 12px calc(30px + env(safe-area-inset-bottom, 0px)); max-width: 1000px; margin: 0 auto; }
     .card {
       background: #fff; border-radius: 16px; padding: 14px; margin-bottom: 12px;
-      border: 1px solid var(--line); box-shadow: 0 2px 8px rgba(0,0,0,.03);
-      position: relative; overflow: hidden; transition: border-color 0.2s;
+      border: 1px solid var(--line); box-shadow: 0 2px 8px rgba(15,23,42,.05);
+      position: relative; overflow: visible;
     }
     .card.high-risk { border-right: 5px solid var(--danger); }
     .card.med-risk { border-right: 5px solid var(--warning); }
@@ -1280,7 +1280,7 @@
       { key:'export',       flag:'hasExport',       can:'canExport',       icon:'📤', label:'خروجی اکسل تمام پرمیت‌ها' },
       { key:'myreport',     flag:'hasMyreport',     can:'canMyreport',     icon:'📊', label:'گزارش عملکرد شخصی (روز/ماه)', defaultOn:true }
     ];
-    const APP_FILE_VERSION = 'v16.26-html';
+    const APP_FILE_VERSION = 'v16.29-html';
     const LS_CACHE = 'ptw_lead_zinc_cache_v2';
     const LS_OFFLINE_QUEUE = 'ptw_offline_queue_v2';
     const LS_SECONDARY_API = 'ptw_secondary_api_url_v2';
@@ -1411,18 +1411,30 @@
       try {
         const res = await getAction8Layers({
           action: 'analyzePermit', code: me.code, firstName: me.firstName, lastName: me.lastName,
-          permitNo: String(pmt.permitNo).trim(), workType: pmt.type||'', place: pmt.place||'', desc: pmt.desc||'', unit: pmt.unit||''
-        }, 25000);
+          permitNo: String(pmt.permitNo).trim(), workType: pmt.type||'', place: pmt.place||'', desc: pmt.desc||'', unit: pmt.unit||'',
+          contractor: getContractor(pmt)||'', status: pmt.permitStatus||'', techReject: pmt.techReject||''
+        }, 35000);
         if(res && res.ok && res.analysis){
           const a = res.analysis;
           const rc = a.risk==='پرریسک'?'risk-high':(a.risk==='متوسط'?'risk-med':'risk-low');
+          const box = function(bg, bd, col, title, text){
+            if(!text) return '';
+            return '<div class="ai-box" style="background:'+bg+';border:1px solid '+bd+';color:'+col+'"><strong>'+title+'</strong>'+esc(text)+'</div>';
+          };
           body.innerHTML = '<div class="card"><div class="no">پرمیت '+esc(pmt.permitNo)+'</div><div class="meta">مجری: '+esc(getContractor(pmt))+' · محل: '+esc(pmt.place||'—')+' · واحد: '+esc(pmt.unit||'—')+'</div>'+(pmt.desc?'<div style="margin-top:8px">'+esc(pmt.desc)+'</div>':'')+'</div>'+
-            '<div class="card"><div style="display:flex;justify-content:space-between;margin-bottom:8px"><span class="badge '+rc+'">ریسک: '+esc(a.risk)+'</span><span class="badge" style="background:#e2e8f0;color:var(--d)">امتیاز: '+esc(a.score)+'/100</span></div>'+
-            '<div style="margin:8px 0"><strong>📂 دسته:</strong> '+esc(a.category)+'</div>'+
-            '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:8px;color:#991b1b;margin-bottom:8px"><strong>⚠️ خطرات:</strong><br>'+esc(a.hazards)+'</div>'+
-            '<div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:8px;color:#065f46;margin-bottom:8px"><strong>🛡️ کنترل‌ها:</strong><br>'+esc(a.controls)+'</div>'+
-            (a.checklist?'<div style="background:#fff;border:1px solid #cbd5e1;border-radius:10px;padding:8px;margin-bottom:8px"><strong>📋 چک‌لیست:</strong><br>'+esc(a.checklist)+'</div>':'')+
-            (a.ppe?'<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:8px"><strong>👷 PPE:</strong><br>'+esc(a.ppe)+'</div>':'')+
+            '<div class="card"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px"><span class="badge '+rc+'">ریسک: '+esc(a.risk)+'</span><span class="badge" style="background:#e2e8f0;color:var(--d)">امتیاز: '+esc(a.score)+'/100</span>'+(a.priority?'<span class="badge wait">اولویت: '+esc(a.priority)+'</span>':'')+'</div>'+
+            '<div style="margin:8px 0"><strong>📂 دسته:</strong> '+esc(a.category||'—')+'</div>'+
+            box('#fef2f2','#fecaca','#991b1b','⚠️ خطرات مشخص این کار', a.hazards)+
+            box('#fff7ed','#fed7aa','#9a3412','🕵️ خطرات پنهان', a.hiddenHazards)+
+            box('#ecfdf5','#a7f3d0','#065f46','🛡️ کنترل‌ها (سلسله‌مراتبی)', a.controls)+
+            box('#f8fafc','#cbd5e1','#0f172a','🔒 LOTO', a.loto)+
+            box('#fff','#cbd5e1','#0f172a','📋 چک‌لیست میدانی', a.checklist)+
+            box('#eff6ff','#bfdbfe','#1e3a8a','👷 PPE', a.ppe)+
+            (a.workPacks?'<div style="margin:6px 0 10px;font-weight:800;color:var(--d)">تشخیص نوع کار: '+esc(a.workPacks)+'</div>':'')+
+            box('#fffbeb','#fcd34d','#78350f','🔗 کارهای تکمیلی الزامی (مثلاً اگر کار در ارتفاع است)', a.relatedWorks)+
+            box('#faf5ff','#e9d5ff','#6b21a8','📄 پرمیت‌های مکمل', a.permitsNeeded)+
+            box('#fef2f2','#fecaca','#7f1d1d','🛑 توقف کار', a.stopWork)+
+            box('#ecfeff','#a5f3fc','#155e75','🚶 تمرکز گشت', a.patrolFocus)+
             '<div class="meta" style="margin-top:8px">منبع: '+esc(a.source||'AI')+'</div></div>';
         } else {
           body.innerHTML = '<div class="empty">' + esc((res && res.error) || 'تحلیل دریافت نشد') + '</div>';
@@ -1893,6 +1905,7 @@
       const no = item.permitNo || '';
       if(a.indexOf('patrol')!==-1) return 'گشت HSE' + (no?(' — پرمیت '+no):'') + (item._photosDropped?' (عکس‌ها ذخیره نشد؛ دوباره فقط وقتی آنلاین شدید بفرستید)':'');
       if(a.indexOf('create')!==-1) return 'ثبت پرمیت' + (no?(' '+no):'');
+      if(a.indexOf('edit')!==-1) return 'ویرایش پرمیت' + (no?(' '+no):'');
       if(a.indexOf('approve')!==-1) return 'تأیید پرمیت ' + no;
       if(a.indexOf('reject')!==-1) return 'رد پرمیت ' + no;
       if(a.indexOf('close')!==-1) return 'بستن پرمیت ' + no;
@@ -3240,8 +3253,31 @@
     /* ============================================================
        باز کردن و بستن مدال ثبت پرمیت
        ============================================================ */
+    let editingPermitNo = '';
+    function isMyPermit(p){
+      if(!me || !p) return false;
+      const c = String(me.code||'').trim();
+      const owner = String(p.createdBy||'').trim();
+      if(!c || !owner) return false;
+      return owner === c;
+    }
+    function canShowEditBtn(p){
+      if(!me || !p) return false;
+      if(isClosedPermit(p) || isRejectedPermit(p)) return false;
+      const owner = String(p.createdBy||'').trim();
+      if(!owner) return false;
+      if(me.isAdmin) return true;
+      return isMyPermit(p);
+    }
     function openCreatePermitModal(){
+      editingPermitNo = '';
       if(!me || (!me.isAdmin && !me.canCreatePermit)){ toast('شما مجوز ثبت پرمیت را ندارید.'); return; }
+      const title = document.querySelector('#viewCreate h1');
+      if(title) title.textContent = '➕ ثبت پرمیت جدید';
+      const btn = document.getElementById('btnConfirmCreatePermit');
+      if(btn) btn.textContent = 'ثبت نهایی گزارش در شیت 💾';
+      const pEl0 = document.getElementById('cpPermitNo');
+      if(pEl0){ pEl0.readOnly = false; pEl0.style.background = '#fff'; }
       const sub = document.getElementById('viewCreateSub');
       if(sub && me) sub.textContent = (me.firstName||'') + ' ' + (me.lastName||'');
       
@@ -3273,11 +3309,109 @@
       try { window.scrollTo(0,1); } catch(e){}
     }
     function closeCreatePermitModal(){
+      editingPermitNo = '';
       lockBodyScroll(false);
       const vp = document.getElementById('viewCreate');
       if(vp) vp.classList.remove('show');
       const old = document.getElementById('createPermitModal');
       if(old) old.classList.remove('show');
+    }
+    function setSelectOrCustom(selId, value){
+      const sel = document.getElementById(selId);
+      if(!sel || value==null) return false;
+      const v = String(value);
+      for(let i=0;i<sel.options.length;i++){
+        if(sel.options[i].value === v || sel.options[i].text === v){ sel.selectedIndex = i; return true; }
+      }
+      return false;
+    }
+    function openEditPermit(permitNo){
+      const p = rows.find(function(x){ return String(x.permitNo).trim() === String(permitNo).trim(); });
+      if(!p){ toast('پرمیت یافت نشد'); return; }
+      if(String(p.createdBy||'').trim() && String(p.createdBy).trim() !== String(me.code||'').trim()){
+        toast('فقط ثبت‌کننده این پرمیت می‌تواند ویرایش کند');
+        return;
+      }
+      if(isClosedPermit(p)){ toast('پرمیت بسته قابل ویرایش نیست'); return; }
+      editingPermitNo = String(p.permitNo).trim();
+      populateInternalUnitsDropdown();
+      populateContractorsDropdown();
+      applyWorkTypesToForm();
+      const title = document.querySelector('#viewCreate h1');
+      if(title) title.textContent = '✏️ ویرایش پرمیت ' + editingPermitNo;
+      const sub = document.getElementById('viewCreateSub');
+      if(sub) sub.textContent = 'فقط پرمیت خودتان · شماره عوض نمی‌شود';
+      const pEl = document.getElementById('cpPermitNo');
+      if(pEl){ pEl.value = editingPermitNo; pEl.readOnly = true; pEl.style.background = '#f1f5f9'; pEl.style.borderColor = '#94a3b8'; }
+      const sd = String(p.startDate||'').replace(/-/g,'/').split('/');
+      if(sd.length>=3){
+        setSelectOrCustom('cpYear', sd[0]);
+        setSelectOrCustom('cpMonth', ('0'+sd[1]).slice(-2));
+        updateDaysForMonth();
+        setSelectOrCustom('cpDay', ('0'+sd[2]).slice(-2));
+      }
+      const tm = String(p.startTime||'07:00').split(':');
+      if(tm.length>=2){
+        setSelectOrCustom('cpHour', ('0'+tm[0]).slice(-2));
+        setSelectOrCustom('cpMinute', ('0'+tm[1]).slice(-2));
+      }
+      const wt = String(p.type||'روتین');
+      const radios = document.querySelectorAll('input[name="cpWorkTypeRadio"]');
+      radios.forEach(function(r){ r.checked = (r.value === wt || (wt.indexOf('غیر')!==-1 && r.value.indexOf('غیر')!==-1)); });
+      if(typeof onWorkTypeChange==='function') onWorkTypeChange();
+      const place = String(p.place||'');
+      const parts = place.split(/\s*\/\s*/);
+      const mainSel = document.getElementById('cpMainLocation');
+      if(mainSel && parts[0]){
+        let matched = false;
+        for(let i=0;i<mainSel.options.length;i++){
+          if(place.indexOf(mainSel.options[i].value)===0 || mainSel.options[i].value===parts[0]){ mainSel.selectedIndex=i; matched=true; break; }
+        }
+        if(!matched){ for(let i=0;i<mainSel.options.length;i++){ if(mainSel.options[i].value==='سایر'){ mainSel.selectedIndex=i; break; } } }
+      }
+      onMainLocationChange();
+      if(parts[1]){
+        if(!setSelectOrCustom('cpSubLocation', parts[1])){
+          setSelectOrCustom('cpSubLocation', 'سایر');
+          onSubLocationChange();
+          const ci = document.getElementById('cpCustomLocationInput');
+          if(ci) ci.value = place;
+        } else onSubLocationChange();
+      }
+      const descEl = document.getElementById('cpDesc');
+      if(descEl) descEl.value = p.desc||'';
+      const contr = getContractor(p);
+      const isInt = /^واحد داخلی/.test(contr) || /^واحد داخلی/.test(String(p.unit||''));
+      const execInternal = document.querySelector('input[name="cpExecType"][value="internal"]');
+      const execCo = document.querySelector('input[name="cpExecType"][value="contractor"]');
+      if(isInt){ if(execInternal) execInternal.checked = true; }
+      else { if(execCo) execCo.checked = true; }
+      onExecTypeChange();
+      if(!isInt){
+        const name = contr.replace(/^پیمانکار:\s*/, '');
+        if(!setSelectOrCustom('cpContractorCompany', name)){
+          setSelectOrCustom('cpContractorCompany', 'سایر');
+          onContractorChange();
+          const ci = document.getElementById('cpCustomContractorInput');
+          if(ci) ci.value = name;
+        } else onContractorChange();
+      }
+      const unit = String(p.unit||'');
+      if(/^پیمانکار/.test(unit)){
+        const r = document.querySelector('input[name="cpReqType"][value="contractor"]');
+        if(r) r.checked = true;
+      } else {
+        const r = document.querySelector('input[name="cpReqType"][value="internal"]');
+        if(r) r.checked = true;
+      }
+      if(typeof onReqTypeChange==='function') onReqTypeChange();
+      const btn = document.getElementById('btnConfirmCreatePermit');
+      if(btn){ btn.disabled=false; btn.textContent = '💾 ذخیره ویرایش'; }
+      updateLivePreview();
+      lockBodyScroll(true);
+      const vp = document.getElementById('viewCreate');
+      if(vp) vp.classList.add('show');
+      try { window.scrollTo(0,1); } catch(e){}
     }
 
     async function confirmCreatePermit(){
@@ -3320,12 +3454,13 @@
       const btn = document.getElementById('btnConfirmCreatePermit');
       if(btn) {
         btn.disabled = true;
-        btn.textContent = '⏳ در حال ثبت در گوگل‌شیت...';
+        btn.textContent = editingPermitNo ? '⏳ در حال ذخیره ویرایش...' : '⏳ در حال ثبت در گوگل‌شیت...';
       }
       inFlightActionKeys.add(key);
       try {
-        const res = await callAPI('createPermit', {
-          action: 'createPermit',
+        const isEdit = !!editingPermitNo;
+        const res = await callAPI(isEdit ? 'editPermit' : 'createPermit', {
+          action: isEdit ? 'editPermit' : 'createPermit',
           code: me.code,
           actorCode: me.code,
           firstName: me.firstName,
@@ -3333,7 +3468,7 @@
           actorName: me.firstName + ' ' + me.lastName,
           createdByName: me.firstName + ' ' + me.lastName,
           fullName: me.firstName + ' ' + me.lastName,
-          permitNo: permitNoInput,
+          permitNo: isEdit ? editingPermitNo : permitNoInput,
           startDate: startDate,
           startTime: startTime,
           endDate: endDate,
@@ -3345,7 +3480,7 @@
           contractor: contractor
         });
         if(res && res.ok){
-          toast('✅ ' + (res.message || 'پرمیت با موفقیت ثبت شد.'));
+          toast('✅ ' + (res.message || (isEdit ? 'ویرایش ذخیره شد.' : 'پرمیت با موفقیت ثبت شد.')));
           closeCreatePermitModal();
           const createdNo = res.permitNo || permitNoInput;
           const nextNum = parseInt(String(createdNo).replace(/\D/g, ''), 10) + 1;
@@ -3770,12 +3905,14 @@
         return;
       }
 
+      try {
       container.innerHTML = list.map((p, i) => {
         const rLevel = getRiskLevel(p);
         const rClass = rLevel === 'high' ? 'high-risk' : (rLevel === 'med' ? 'med-risk' : 'low-risk');
         const isRej = isRejectedPermit(p);
         const isAct = isActivePermit(p);
         const isPend = isPendingPermit(p);
+        const isClose = isClosedPermit(p);
         const canApproveP   = !!(me && (me.isAdmin || me.canApprove));
         const canRejectP    = !!(me && (me.isAdmin || me.canReject));
         const canReinspectP = !!(me && (me.isAdmin || me.canReinspect));
@@ -3786,6 +3923,7 @@
         const canReactP     = !!(me && (me.isAdmin || me.canReactivate));
         const deleteBtn = canDeleteP ? `<button class="btn" style="background:#ef4444;color:#fff;border:none" onclick="confirmDeletePermit('${esc(p.permitNo)}')">🗑️ حذف دائم</button>` : '';
         const aiBtn = canAnalyzeP ? `<button class="btn btn-ai" onclick="goAnalyzePage('${esc(p.permitNo)}')">🧠 تحلیل AI</button>` : '';
+        const editBtn = '';
 
         let actionButtons = '';
 
@@ -3795,6 +3933,7 @@
           actionButtons = `
             ${approveBtn}
             ${rejectBtn}
+            ${editBtn}
             ${aiBtn}
             ${deleteBtn}
           `;
@@ -3804,6 +3943,7 @@
           actionButtons = `
             ${patrolBtn}
             ${closeBtn}
+            ${editBtn}
             ${aiBtn}
             <button class="btn btn-w" onclick="goHistoryPage('${esc(p.permitNo)}')">📋 تاریخچه</button>
             ${deleteBtn}
@@ -3814,6 +3954,7 @@
           actionButtons = `
             ${reinspectBtn}
             ${reBtn}
+            ${editBtn}
             ${aiBtn}
             ${deleteBtn}
           `;
@@ -3822,6 +3963,7 @@
           actionButtons = `
             ${reBtn}
             <button class="btn btn-w" onclick="goHistoryPage('${esc(p.permitNo)}')">📋 تاریخچه بازدیدها</button>
+            ${editBtn}
             ${aiBtn}
             ${deleteBtn}
           `;
@@ -3845,6 +3987,7 @@
               <div class="k">واحد درخواست‌کننده</div><div class="v">${esc(p.unit || '—')}</div>
               <div class="k">زمان اجرا</div><div class="v">${esc(formatPeriod(p))}</div>
               <div class="k">شرح کار</div><div class="v">${esc(p.desc || '—')}</div>
+              ${p.createdByName ? `<div class="k">ثبت‌کننده</div><div class="v">${esc(p.createdByName)}</div>` : ''}
               ${p.tech ? `<div class="k">تأیید فنی</div><div class="v">${esc(p.tech)}</div>` : ''}
               ${p.techReject ? `<div class="k">رد فنی / علت</div><div class="v" style="color:var(--danger)">${esc(p.techReject)}</div>` : ''}
               ${p.stopReason ? `<div class="k">علت توقف</div><div class="v" style="color:var(--danger)">${esc(p.stopReason)}</div>` : ''}
@@ -3852,11 +3995,16 @@
             </div>
 
             <div class="card-actions">
+              ${(!isClose && isMyPermit(p)) ? `<button type="button" class="btn btn-edit" onclick="openEditPermit('${esc(p.permitNo)}')">✏️ ویرایش پرمیت</button>` : ''}
               ${actionButtons}
             </div>
           </article>
         `;
       }).join('');
+      } catch(ePaint){
+        try { console.error(ePaint); } catch(eC){}
+        container.innerHTML = '<div class="empty"><div class="big">⚠️</div><div>خطا در نمایش لیست</div></div>';
+      }
     }
 
 
@@ -5317,5 +5465,5 @@
 
     window.onload = boot;
   </script>
-</body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a2a5efe868ed3d5d',t:'MTc4NjYwNTQxNQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
