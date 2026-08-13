@@ -823,6 +823,7 @@
 
       <div style="margin-bottom:10px;background:#f8fafc;padding:10px;border-radius:12px;border:1px solid #e2e8f0">
         <div style="font-size:0.78rem;font-weight:800;color:var(--d);margin-bottom:4px">📋 چک‌لیست کنترلی سرب و روی (HSE):</div>
+        <div id="patrolChecklistBox">
         <div class="chk-item"><input type="checkbox" class="patrol-chk"> <span>۱. ماسک تنفسی P3 / FFP3 و تجهیزات ضد غبار سرب</span></div>
         <div class="chk-item"><input type="checkbox" class="patrol-chk"> <span>۲. قفل و برچسب ایمنی LOTO و قطع برق کامل تجهیز</span></div>
         <div class="chk-item"><input type="checkbox" class="patrol-chk"> <span>۳. کپسول اطفاء حریق / پایش گاز / Fire Watch</span></div>
@@ -830,6 +831,7 @@
         <div class="chk-item"><input type="checkbox" class="patrol-chk"> <span>۵. هارنس دو قلاب / داربست استاندارد در ارتفاع</span></div>
         <div class="chk-item"><input type="checkbox" class="patrol-chk"> <span>۶. برگزاری جلسات ایمنی قبل از کار (TBM)</span></div>
         <div class="chk-item"><input type="checkbox" class="patrol-chk"> <span>۷. مسدود نبودن مسیرهای فرار اضطراری و کلید Emergency</span></div>
+        </div>
       </div>
 
       <label>نتیجه ارزیابی گشت</label>
@@ -1616,13 +1618,17 @@
     /* ============================================================
        اتصال مستقیم لایه ۴ (Direct POST با پشتیبانی هوشمند)
        ============================================================ */
-    const WRITE_ACTIONS = ['approvePermit','rejectPermit','reinspectPermit','closePermit','savePatrolVisit','reactivatePermit','setgrant','setReactivation','setCreatePermit','createPermit','deletepermit','saveunitssettings','savehsecatalog','setuseraccess','savelogo'];
-    const READ_LIGHT = ['permits','visits','ping','test','listusers','getunitssettings','analyzepermit','gethsecatalog','mystats','checkin'];
+    const WRITE_ACTIONS = ['approvePermit','rejectPermit','reinspectPermit','closePermit','savePatrolVisit','reactivatePermit','setgrant','setReactivation','setCreatePermit','createPermit','editPermit','deletepermit','deletePermit','saveunitssettings','savehsecatalog','setuseraccess','savelogo'];
+    const READ_LIGHT = ['permits','visits','ping','test','listusers','getunitssettings','analyzepermit','analyzePermit','gethsecatalog','mystats','checkin'];
     let probeInFlight = null;
     let lastProbeAt = 0;
 
     function isWriteAction(action){
-      return WRITE_ACTIONS.indexOf(String(action||'')) !== -1;
+      const a = String(action||'').toLowerCase();
+      for(let i=0;i<WRITE_ACTIONS.length;i++){
+        if(String(WRITE_ACTIONS[i]).toLowerCase() === a) return true;
+      }
+      return false;
     }
     function isHeavyPayload(payload){
       if(!payload) return false;
@@ -1812,11 +1818,12 @@
         const slice = Math.max(1200, Math.floor(defT / Math.max(1, order.length - i)));
         try {
           const parsed = await sendOnLayer(idx, payload, slice);
-          if(parsed){
-            if(parsed.ok && write && typeof playSuccessBeep === 'function') playSuccessBeep();
+          if(parsed && parsed.ok){
+            if(write && typeof playSuccessBeep === 'function') playSuccessBeep();
             lockLayer(idx, Date.now() - t0);
             return parsed;
           }
+          if(parsed && parsed.ok === false) lastErr = parsed.error || 'ok=false';
         } catch(e){
           lastErr = e;
         }
@@ -3264,6 +3271,7 @@
     function canShowEditBtn(p){
       if(!me || !p) return false;
       if(isClosedPermit(p) || isRejectedPermit(p)) return false;
+      if(p.canEdit === true) return true;
       const owner = String(p.createdBy||'').trim();
       if(!owner) return false;
       if(me.isAdmin) return true;
@@ -5465,5 +5473,5 @@
 
     window.onload = boot;
   </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a2a5efe868ed3d5d',t:'MTc4NjYwNTQxNQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a2a60ca3baa174cd',t:'MTc4NjYwNjU5Mg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
