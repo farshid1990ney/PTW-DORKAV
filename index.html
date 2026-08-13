@@ -1419,25 +1419,42 @@
         if(res && res.ok && res.analysis){
           const a = res.analysis;
           const rc = a.risk==='پرریسک'?'risk-high':(a.risk==='متوسط'?'risk-med':'risk-low');
+          const formatAiItems = function(val){
+            if(val == null || val === '') return '';
+            if(Array.isArray(val)) return val.map(function(x){ return String(x||'').trim(); }).filter(Boolean);
+            let s = String(val).replace(/\r/g,'\n');
+            s = s.replace(/\bcaso\b/gi, 'صورت').replace(/در\s*caso/gi, 'در صورت');
+            s = s.replace(/([آ-ی])([A-Za-z0-9])/g, '$1 $2').replace(/([A-Za-z0-9])([آ-ی])/g, '$1 $2');
+            s = s.replace(/([آ-ی])(?=امتیاز|اولویت|ریسک|دسته)/g, '$1\n');
+            const parts = s.split(/\n+|[/|•●▪▸←→]+|(?:\s*[,،;؛]\s*)|(?:\s*(?=\d+[\.\-\)]\s))/).map(function(x){ return x.replace(/^\d+[\.\-\)]\s*/,'').trim(); }).filter(function(x){ return x && x !== '-' && x !== '—'; });
+            if(parts.length > 1) return parts;
+            return [s.trim()];
+          };
           const box = function(bg, bd, col, title, text){
-            if(!text) return '';
-            return '<div class="ai-box" style="background:'+bg+';border:1px solid '+bd+';color:'+col+'"><strong>'+title+'</strong>'+esc(text)+'</div>';
+            const items = formatAiItems(text);
+            if(!items.length) return '';
+            const lis = items.map(function(it){ return '<li style="margin:0 0 6px 0;padding:0;line-height:1.7">'+esc(it)+'</li>'; }).join('');
+            return '<div class="ai-box" style="background:'+bg+';border:1px solid '+bd+';color:'+col+'"><strong style="display:block;margin-bottom:8px">'+title+'</strong><ul style="margin:0;padding:0 18px 0 0;list-style:disc">'+lis+'</ul></div>';
           };
           body.innerHTML = '<div class="card"><div class="no">پرمیت '+esc(pmt.permitNo)+'</div><div class="meta">مجری: '+esc(getContractor(pmt))+' · محل: '+esc(pmt.place||'—')+' · واحد: '+esc(pmt.unit||'—')+'</div>'+(pmt.desc?'<div style="margin-top:8px">'+esc(pmt.desc)+'</div>':'')+'</div>'+
-            '<div class="card"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px"><span class="badge '+rc+'">ریسک: '+esc(a.risk)+'</span><span class="badge" style="background:#e2e8f0;color:var(--d)">امتیاز: '+esc(a.score)+'/100</span>'+(a.priority?'<span class="badge wait">اولویت: '+esc(a.priority)+'</span>':'')+'</div>'+
-            '<div style="margin:8px 0"><strong>📂 دسته:</strong> '+esc(a.category||'—')+'</div>'+
+            '<div class="card"><div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">'+
+            '<span class="badge '+rc+'" style="margin:0">ریسک: '+esc(a.risk)+'</span>'+
+            '<span class="badge" style="background:#e2e8f0;color:var(--d);margin:0">امتیاز: '+esc(a.score)+' / 100</span>'+
+            (a.priority?'<span class="badge wait" style="margin:0">اولویت: '+esc(a.priority)+'</span>':'')+
+            '</div>'+
+            '<div style="margin:8px 0 12px"><strong>📂 دسته:</strong> '+esc(a.category||'—')+'</div>'+
             box('#fef2f2','#fecaca','#991b1b','⚠️ خطرات مشخص این کار', a.hazards)+
             box('#fff7ed','#fed7aa','#9a3412','🕵️ خطرات پنهان', a.hiddenHazards)+
             box('#ecfdf5','#a7f3d0','#065f46','🛡️ کنترل‌ها (سلسله‌مراتبی)', a.controls)+
             box('#f8fafc','#cbd5e1','#0f172a','🔒 LOTO', a.loto)+
             box('#fff','#cbd5e1','#0f172a','📋 چک‌لیست میدانی', a.checklist)+
             box('#eff6ff','#bfdbfe','#1e3a8a','👷 PPE', a.ppe)+
-            (a.workPacks?'<div style="margin:6px 0 10px;font-weight:800;color:var(--d)">تشخیص نوع کار: '+esc(a.workPacks)+'</div>':'')+
-            box('#fffbeb','#fcd34d','#78350f','🔗 کارهای تکمیلی الزامی (مثلاً اگر کار در ارتفاع است)', a.relatedWorks)+
+            (a.workPacks?'<div style="margin:10px 0;font-weight:800;color:var(--d)">تشخیص نوع کار: '+esc(a.workPacks)+'</div>':'')+
+            box('#fffbeb','#fcd34d','#78350f','🔗 کارهای تکمیلی الزامی', a.relatedWorks)+
             box('#faf5ff','#e9d5ff','#6b21a8','📄 پرمیت‌های مکمل', a.permitsNeeded)+
             box('#fef2f2','#fecaca','#7f1d1d','🛑 توقف کار', a.stopWork)+
             box('#ecfeff','#a5f3fc','#155e75','🚶 تمرکز گشت', a.patrolFocus)+
-            '<div class="meta" style="margin-top:8px">منبع: '+esc(a.source||'AI')+'</div></div>';
+            '<div class="meta" style="margin-top:10px">منبع: '+esc(a.source||'AI')+'</div></div>';
         } else {
           body.innerHTML = '<div class="empty">' + esc((res && res.error) || 'تحلیل دریافت نشد') + '</div>';
         }
@@ -5490,5 +5507,5 @@
 
     window.onload = boot;
   </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a2a61e70efb474cd',t:'MTc4NjYwNzMyMQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</body>
 </html>
