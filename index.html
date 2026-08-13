@@ -1795,41 +1795,53 @@
       return order;
     }
 
+    function isOfflineSkipAction(action){
+      const a = String(action||'').toLowerCase();
+      return a === 'deletepermit' || a === 'delete' || a === 'setuseraccess' || a === 'exportpermits';
+    }
     async function callAPI(action, params = {}, timeoutMs) {
-      const payload = Object.assign({ action: action }, params);
+      const payload = Object.assign({}, params || {}, { action: action });
       if (!payload.txnId) {
         payload.txnId = 'TXN_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
       }
-      const write = isWriteAction(action);
+      if (me && me.code && !payload.code) payload.code = me.code;
+      const write = isWriteAction(action) || isWriteAction(payload.action);
       const online = (typeof navigator === 'undefined') ? true : navigator.onLine;
+      const skipQ = isOfflineSkipAction(action) || isOfflineSkipAction(payload.action);
 
       if(write && online === false){
+        if(skipQ) return { ok:false, error:'اینترنت قطع است. حذف/این عملیات به صف نمی‌رود؛ دوباره آنلاین تلاش کنید.' };
         enqueueOfflineAction(payload);
         updateActiveLayerUI(6, 0);
         return { ok:false, offlineQueued:true, error:'اینترنت گوشی قطع است. عملیات در صف آفلاین شما ذخیره شد.' };
       }
 
       const t0 = Date.now();
-      const defT = timeoutMs || (isHeavyPayload(payload) ? 25000 : (write ? 15000 : 10000));
+      const defT = timeoutMs || (isHeavyPayload(payload) ? 25000 : (write ? 20000 : 12000));
       const order = fallbackOrder(lockedLayer || 4, payload);
       let lastErr = null;
       for(let i=0;i<order.length;i++){
         const idx = order[i];
-        const slice = Math.max(1200, Math.floor(defT / Math.max(1, order.length - i)));
+        const slice = Math.max(4000, Math.floor(defT / Math.max(1, order.length - i)));
         try {
           const parsed = await sendOnLayer(idx, payload, slice);
-          if(parsed && parsed.ok){
-            if(write && typeof playSuccessBeep === 'function') playSuccessBeep();
-            lockLayer(idx, Date.now() - t0);
-            return parsed;
+          if(parsed && typeof parsed === 'object'){
+            if(parsed.ok){
+              if(write && typeof playSuccessBeep === 'function') playSuccessBeep();
+              lockLayer(idx, Date.now() - t0);
+              return parsed;
+            }
+            if(parsed.error || parsed.message || parsed.ok === false){
+              lockLayer(idx, Date.now() - t0);
+              return parsed;
+            }
           }
-          if(parsed && parsed.ok === false) lastErr = parsed.error || 'ok=false';
         } catch(e){
           lastErr = e;
         }
       }
 
-      if (write && !payload._fromQueue) {
+      if (write && !payload._fromQueue && !skipQ) {
         enqueueOfflineAction(payload);
         updateActiveLayerUI(6, 0);
         const reason = online ? 'ارتباط با سرور برقرار نشد؛ در صف آفلاین شما ذخیره شد.' : 'اینترنت گوشی قطع است.';
@@ -3527,17 +3539,22 @@
       if (!confirm('⚠️ هشدار امنیتی:\nآیا از حذف کامل و دائمی پرمیت شماره (' + permitNo + ') از شیت و اپلیکیشن اطمینان دارید؟\nاین عملیات در لاگ حسابرسی ثبت گردیده و غیرقابل بازگشت است.')) {
         return;
       }
+      toast('⏳ در حال حذف پرمیت ' + permitNo + '...');
       const res = await callAPI('deletePermit', {
-        action: 'deletepermit',
-        permitNo: permitNo,
+        code: me.code,
         actorCode: me.code,
-        adminCode: me.code
-      });
+        adminCode: me.code,
+        permitNo: String(permitNo).trim(),
+        reason: 'حذف از اپ توسط ' + ((me.firstName||'')+' '+(me.lastName||'')).trim()
+      }, 25000);
       if (res && res.ok) {
+        rows = (rows||[]).filter(function(p){ return String(p.permitNo||'').trim() !== String(permitNo).trim(); });
+        try { localStorage.setItem(LS_CACHE, JSON.stringify(rows)); } catch(eC){}
+        paint();
         toast('✅ ' + (res.message || 'پرمیت شماره ' + permitNo + ' با موفقیت حذف شد.'));
         refreshQuiet();
       } else {
-        toast('❌ خطا در حذف پرمیت: ' + ((res && res.error) || 'خطای سرور'));
+        toast('❌ خطا در حذف پرمیت: ' + ((res && res.error) || 'سرور جواب نداد'));
       }
     }
 
@@ -5473,5 +5490,5 @@
 
     window.onload = boot;
   </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a2a60ca3baa174cd',t:'MTc4NjYwNjU5Mg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a2a61e70efb474cd',t:'MTc4NjYwNzMyMQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
