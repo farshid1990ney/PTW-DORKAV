@@ -3290,21 +3290,16 @@
        باز کردن و بستن مدال ثبت پرمیت
        ============================================================ */
     let editingPermitNo = '';
+    // نکته امنیتی: بک‌اند دیگر کد صادرکننده (که همان رمز ورود اوست) را برنمی‌گرداند؛
+    // به‌جای آن، برای هر پرمیت پرچم p.canEdit توسط سرور (بر اساس مالکیت یا مدیر بودن) محاسبه و ارسال می‌شود.
     function isMyPermit(p){
       if(!me || !p) return false;
-      const c = String(me.code||'').trim();
-      const owner = String(p.createdBy||'').trim();
-      if(!c || !owner) return false;
-      return owner === c;
+      return p.canEdit === true;
     }
     function canShowEditBtn(p){
       if(!me || !p) return false;
       if(isClosedPermit(p) || isRejectedPermit(p)) return false;
-      if(p.canEdit === true) return true;
-      const owner = String(p.createdBy||'').trim();
-      if(!owner) return false;
-      if(me.isAdmin) return true;
-      return isMyPermit(p);
+      return p.canEdit === true;
     }
     function openCreatePermitModal(){
       editingPermitNo = '';
@@ -3365,8 +3360,8 @@
     function openEditPermit(permitNo){
       const p = rows.find(function(x){ return String(x.permitNo).trim() === String(permitNo).trim(); });
       if(!p){ toast('پرمیت یافت نشد'); return; }
-      if(String(p.createdBy||'').trim() && String(p.createdBy).trim() !== String(me.code||'').trim()){
-        toast('فقط ثبت‌کننده این پرمیت می‌تواند ویرایش کند');
+      if(p.canEdit !== true){
+        toast('فقط ثبت‌کننده این پرمیت (یا مدیر ارشد) می‌تواند ویرایش کند');
         return;
       }
       if(isClosedPermit(p)){ toast('پرمیت بسته قابل ویرایش نیست'); return; }
