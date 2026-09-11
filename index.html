@@ -4373,22 +4373,33 @@
       }
       setTimeout(function(){ logAppCheck('open'); loadHseCatalog(); }, 400);
       window.__appSleeping = false;
+      window.__resumeGraceUntil = 0;
+      // وقتی صفحه گوشی خاموش/قفل می‌شود، مرورگر تایمرها و شبکه را متوقف یا کند می‌کند.
+      // به همین دلیل، لحظهٔ برگشت (resume)، اتصال شبکه هنوز کامل برقرار نشده و اولین
+      // درخواست ممکن است شکست بخورد. برای همین: ۱) یک بازهٔ فرصت (grace) برای سرکوب خطای
+      // نمایشی در نظر می‌گیریم، ۲) خودمان به‌صورت خودکار و بی‌صدا با کمی تأخیر و یک تلاش مجدد،
+      // داده‌ها را رفرش می‌کنیم تا کاربر لازم نباشد دستی رفرش بزند و خطا ببیند.
+      function resumeAndRefresh(){
+        window.__appSleeping = false;
+        window.__silentRefresh = true;
+        window.__resumeGraceUntil = Date.now() + 8000;
+        logAppCheck('resume');
+        setTimeout(function(){
+          window.__silentRefresh = true;
+          loadPermits();
+        }, 1500);
+      }
       document.addEventListener('visibilitychange', function(){
         if(document.visibilityState !== 'visible'){
           window.__appSleeping = true;
           window.__silentRefresh = true;
           return;
         }
-        window.__appSleeping = false;
-        window.__silentRefresh = true;
-        logAppCheck('resume');
+        resumeAndRefresh();
       });
       window.addEventListener('pagehide', function(){ window.__appSleeping = true; });
       window.addEventListener('freeze', function(){ window.__appSleeping = true; });
-      window.addEventListener('pageshow', function(){
-        window.__appSleeping = false;
-        window.__silentRefresh = true;
-      });
+      window.addEventListener('pageshow', function(){ resumeAndRefresh(); });
       window.addEventListener('unhandledrejection', function(ev){
         if(window.__appSleeping || (document && document.hidden)){
           try { ev.preventDefault(); } catch(e){}
@@ -4532,12 +4543,23 @@
         document.getElementById('dot').className = 'dot err';
         const hidden = (typeof document !== 'undefined') && (document.hidden || document.visibilityState === 'hidden');
         const online = (typeof navigator !== 'undefined') ? navigator.onLine : true;
+        const inResumeGrace = window.__resumeGraceUntil && Date.now() < window.__resumeGraceUntil;
         if (rows && rows.length) {
           try { fillCo(); paint(); } catch(eP){}
         }
-        if(!(hidden || window.__appSleeping)){
+        if(!(hidden || window.__appSleeping || inResumeGrace)){
           const msg = online ? 'سرور در دسترس نیست' : 'اینترنت گوشی قطع است';
           toast('⚠️ ' + msg + (rows && rows.length ? '؛ لیست قبلی روی گوشی ماند.' : '.'));
+        }
+        // اگر هنوز داخل بازهٔ برگشت از خواب هستیم، یک بار دیگر بی‌صدا و با کمی تأخیر امتحان می‌کنیم
+        // (معمولاً تا لحظهٔ برقراری کامل شبکهٔ گوشی پس از باز شدن صفحه)
+        if(inResumeGrace && !window.__resumeRetryScheduled){
+          window.__resumeRetryScheduled = true;
+          setTimeout(function(){
+            window.__resumeRetryScheduled = false;
+            window.__silentRefresh = true;
+            loadPermits();
+          }, 3000);
         }
         window.__silentRefresh = false;
       } finally {
