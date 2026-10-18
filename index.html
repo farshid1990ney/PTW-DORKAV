@@ -1216,7 +1216,7 @@
       { key:'units',        flag:'hasUnits',        can:'canUnits',        icon:'🏢', label:'ویرایش واحدها/پیمانکاران' },
       { key:'analyze',      flag:'hasAnalyze',      can:'canAnalyze',      icon:'🧠', label:'تحلیل هوش مصنوعی (AI)' }
     ];
-    const APP_FILE_VERSION = 'v16.15-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل) — v16.2: فیکس تحلیل AI (ارسال code + نمایش خطای واقعی سرور)
+    const APP_FILE_VERSION = 'v16.16-html';  // نسخه فایل HTML (برای تشخیص نسخه قدیمی فایل) — v16.2: فیکس تحلیل AI (ارسال code + نمایش خطای واقعی سرور)
     const LS_CACHE = 'ptw_lead_zinc_cache_v2';
     const LS_OFFLINE_QUEUE = 'ptw_offline_queue_v2';
     const LS_SECONDARY_API = 'ptw_secondary_api_url_v2';
@@ -1524,12 +1524,18 @@
       }
     }
 
-    // fetch سازگار با تمامی مرورگرها و وب‌ویوهای اندروید
+    // fetch سازگار با تمامی مرورگرها و وب‌ویوهای اندروید (با لغو واقعی درخواست در تایم‌اوت)
     function fetchWithTimeout(url, options, tMs){
       return new Promise(function(resolve, reject){
         let done = false;
-        const to = setTimeout(function(){ if(!done){ done = true; reject(new Error('Timeout')); } }, tMs || 25000);
-        fetch(url, options).then(function(r){
+        let ctrl = null;
+        try { if(typeof AbortController !== 'undefined') ctrl = new AbortController(); } catch(e){}
+        const to = setTimeout(function(){
+          if(!done){ done = true; try{ if(ctrl) ctrl.abort(); }catch(e){} reject(new Error('Timeout')); }
+        }, tMs || 25000);
+        const opts = Object.assign({}, options || {});
+        if(ctrl) opts.signal = ctrl.signal;
+        fetch(url, opts).then(function(r){
           if(!done){ done = true; clearTimeout(to); resolve(r); }
         }).catch(function(e){
           if(!done){ done = true; clearTimeout(to); reject(e); }
@@ -1594,7 +1600,7 @@
       if(isHeavyPayload(payload)) throw new Error('L3 heavy');
       const q = payloadQuery(payload);
       const full = url + (url.indexOf('?') === -1 ? '?' : '&') + q;
-      const resp = await fetchWithTimeout(full, { method: 'GET' }, timeoutMs);
+      const resp = await fetchWithTimeout(full, { method: 'GET', cache: 'no-store' }, timeoutMs);
       if(!resp || !resp.ok) throw new Error('L3 status');
       const parsed = parseApiText(await resp.text());
       if(!parsed) throw new Error('L3 json');
@@ -1649,40 +1655,34 @@
       }
       const url = primaryApiUrl();
       const ping = { action: 'ping', txnId: 'PING_' + Date.now() };
-      const jobs = [
-        { idx: 4, run: function(){ return tryLayer4(url, ping, 1000); } },
-        { idx: 3, run: function(){ return tryLayer3(url, ping, 1000); } },
-        { idx: 2, run: function(){ return tryLayer2(url, ping, 1000); } }
-      ];
-      if(secondaryApiUrl()) jobs.push({ idx: 5, run: function(){ return tryLayer5(ping, 1000); } });
-
-      probeInFlight = new Promise(function(resolve){
-        let settled = false;
-        let left = jobs.length;
-        jobs.forEach(function(job){
+      probeInFlight = (async function(){
+        const tries = [3, 4];
+        for(let i = 0; i < tries.length; i++){
+          const idx = tries[i];
           const t0 = Date.now();
-          Promise.resolve().then(job.run).then(function(res){
-            left--;
-            if(settled) return;
+          try {
+            const res = idx === 3 ? await tryLayer3(url, ping, 9000) : await tryLayer4(url, ping, 9000);
             if(res && (res.ok === true || res.version || res.message)){
-              settled = true;
               const ms = Date.now() - t0;
-              lockLayer(job.idx, ms);
+              window.__srvIdem = !!res.build;
+              lockLayer(idx, ms);
               lastProbeAt = Date.now();
-              resolve({ ok:true, layer: job.idx, latency: ms, res: res });
-            } else if(left<=0 && !settled){
-              settled = true;
-              resolve({ ok:false });
+              return { ok:true, layer: idx, latency: ms, res: res };
             }
-          }).catch(function(){
-            left--;
-            if(left<=0 && !settled){
-              settled = true;
-              resolve({ ok:false });
+          } catch(e){}
+        }
+        if(secondaryApiUrl()){
+          const t1 = Date.now();
+          try {
+            const res5 = await tryLayer5(ping, 9000);
+            if(res5 && (res5.ok === true || res5.version || res5.message)){
+              lockLayer(5, Date.now() - t1);
+              return { ok:true, layer: 5, latency: Date.now() - t1, res: res5 };
             }
-          });
-        });
-      });
+          } catch(e){}
+        }
+        return { ok:false };
+      })();
       try { return await probeInFlight; }
       finally { probeInFlight = null; }
     }
@@ -1696,20 +1696,24 @@
       throw new Error('bad layer');
     }
 
-    function fallbackOrder(preferred, payload){
-      const heavy = isHeavyPayload(payload);
-      const write = isWriteAction(payload.action);
-      let order = [];
-      const add = function(n){ if(order.indexOf(n)===-1) order.push(n); };
-      if(preferred) add(preferred);
-      add(4);
-      if(!heavy){ add(3); add(2); }
-      if(secondaryApiUrl()) add(5);
-      if(heavy || write){
-        order = order.filter(function(n){ return n===4 || n===5; });
-        if(!order.length) order = [4];
+    function sleepMs(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+
+    // ترتیب تلاش‌ها: خواندن = یک لایه + یک لایه جایگزین | نوشتن = POST + (یک تلاش مجدد امن با همان txnId)
+    function buildAttempts(payload, write, heavy){
+      const att = [];
+      const sec = !!secondaryApiUrl();
+      if(write || heavy){
+        att.push(4);
+        // تلاش مجدد فقط وقتی امن است که سرور جدید (با جلوگیری از ثبت تکراری) نصب باشد
+        if(write && window.__srvIdem === true) att.push(4);
+        if(sec) att.push(5);
+      } else {
+        const pref = (lockedLayer === 3 || lockedLayer === 4) ? lockedLayer : 3;
+        att.push(pref);
+        att.push(pref === 3 ? 4 : 3);
+        if(sec) att.push(5);
       }
-      return order;
+      return att;
     }
 
     async function callAPI(action, params = {}, timeoutMs) {
@@ -1718,6 +1722,7 @@
         payload.txnId = 'TXN_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
       }
       const write = isWriteAction(action);
+      const heavy = isHeavyPayload(payload);
       const online = (typeof navigator === 'undefined') ? true : navigator.onLine;
 
       if(write && online === false){
@@ -1727,16 +1732,20 @@
       }
 
       const t0 = Date.now();
-      const defT = timeoutMs || (isHeavyPayload(payload) ? 25000 : (write ? 15000 : 10000));
-      const order = fallbackOrder(lockedLayer || 4, payload);
+      // بودجه‌ی زمانی واقعی (سرور Apps Script گاهی ۳ تا ۸ ثانیه برای شروع سرد نیاز دارد)
+      const budget = Math.max(timeoutMs || 0, heavy ? 40000 : (write ? 30000 : 22000));
+      const attempts = buildAttempts(payload, write, heavy);
       let lastErr = null;
-      for(let i=0;i<order.length;i++){
-        const idx = order[i];
-        const slice = Math.max(1200, Math.floor(defT / Math.max(1, order.length - i)));
+      for(let i = 0; i < attempts.length; i++){
+        const left = budget - (Date.now() - t0);
+        if(left < 2500) break;
+        const isLast = (i === attempts.length - 1);
+        const slice = isLast ? left : Math.max(4000, Math.floor(left * 0.6));
+        if(i > 0) await sleepMs(600);
         try {
-          const parsed = await sendOnLayer(idx, payload, slice);
+          const parsed = await sendOnLayer(attempts[i], payload, slice);
           if(parsed){
-            lockLayer(idx, Date.now() - t0);
+            lockLayer(attempts[i], Date.now() - t0);
             return parsed;
           }
         } catch(e){
@@ -1747,7 +1756,7 @@
       if (write && !payload._fromQueue) {
         enqueueOfflineAction(payload);
         updateActiveLayerUI(6, 0);
-        const reason = online ? 'ارتباط با سرور برقرار نشد؛ در صف آفلاین شما ذخیره شد.' : 'اینترنت گوشی قطع است.';
+        const reason = online ? 'ارتباط با سرور برقرار نشد؛ در صف آفلاین شما ذخیره شد (در صورت ثبت‌شدن قبلی، تکراری ثبت نمی‌شود).' : 'اینترنت گوشی قطع است.';
         return { ok: false, offlineQueued: true, error: reason };
       }
 
@@ -1766,7 +1775,7 @@
 
       return {
         ok: false,
-        error: online ? 'خطا در ارتباط با سرور (هیچ لایه‌ای پاسخ نداد).' : 'اینترنت دستگاه قطع است.'
+        error: online ? 'خطا در ارتباط با سرور (پاسخی دریافت نشد).' : 'اینترنت دستگاه قطع است.'
       };
     }
 
@@ -1843,10 +1852,17 @@
       copy._ownerCode = myOwnerCode() || itemOwnerCode(copy);
       copy._ownerName = me ? ((me.firstName||'') + ' ' + (me.lastName||'')).trim() : '';
       if (copy.photoBase64 || (copy.photosBase64 && copy.photosBase64.length)) {
-        copy._photosDropped = true;
-        copy._photoCount = (copy.photosBase64 && copy.photosBase64.length) || (copy.photoBase64?1:0);
+        const plist = (copy.photosBase64 && copy.photosBase64.length) ? copy.photosBase64 : [copy.photoBase64];
+        let totalLen = 0;
+        plist.forEach(function(x){ totalLen += String(x || '').length; });
+        copy._photoCount = plist.length;
         delete copy.photoBase64;
-        delete copy.photosBase64;
+        if (totalLen <= 1500000) {
+          copy.photosBase64 = plist;      // عکس‌ها در صف نگه داشته می‌شوند
+        } else {
+          copy._photosDropped = true;     // خیلی حجیم؛ مثل قبل حذف می‌شود
+          delete copy.photosBase64;
+        }
       }
       if (queue.some(function(x){ return isSameQueueItem(x, copy); })) {
         updateDrawerUI();
@@ -1858,8 +1874,19 @@
       try {
         localStorage.setItem(LS_OFFLINE_QUEUE, JSON.stringify(queue));
       } catch(eQ){
-        toast('❌ حافظه گوشی پر است؛ صف ذخیره نشد. اینترنت را وصل کنید و فقط یک‌بار بفرستید.');
-        return;
+        // حافظه پر است: یک‌بار بدون عکس تلاش می‌کنیم
+        if (copy.photosBase64) {
+          delete copy.photosBase64;
+          copy._photosDropped = true;
+          try { localStorage.setItem(LS_OFFLINE_QUEUE, JSON.stringify(queue)); }
+          catch(eQ2){
+            toast('❌ حافظه گوشی پر است؛ صف ذخیره نشد. اینترنت را وصل کنید و فقط یک‌بار بفرستید.');
+            return;
+          }
+        } else {
+          toast('❌ حافظه گوشی پر است؛ صف ذخیره نشد. اینترنت را وصل کنید و فقط یک‌بار بفرستید.');
+          return;
+        }
       }
       updateDrawerUI();
       renderOfflineQueueList();
@@ -3384,8 +3411,7 @@
       } catch(e){}
 
       // دریافت اولیه بی‌صدا (لیست از کش همین حالا دیده می‌شود)
-      setTimeout(async function(){
-        await probeChannels();
+      setTimeout(function(){
         window.__silentRefresh = true;
         loadPermits();
       }, 50);
@@ -3452,13 +3478,7 @@
       if(loadPermitsBusy) return;
       loadPermitsBusy = true;
 
-      if(!window.__silentRefresh){
-        try {
-          toast('🔄 پینگ ۱ ثانیه‌ای لایه‌ها...');
-          const pr = await probeChannels();
-          if(pr && pr.ok) toast('✓ وصل به ' + getLayerName(pr.layer) + ' — ' + pr.latency + 'ms');
-        } catch(eP){}
-      }
+      if(!window.__silentRefresh){ toast('🔄 در حال دریافت اطلاعات...'); }
 
       const btnHeader = document.getElementById('headerRefreshBtn');
 
@@ -3473,6 +3493,7 @@
         }
 
         if(!data || !data.ok) throw new Error();
+        window.__srvIdem = !!data.build;
         rows = Array.isArray(data.rows) ? data.rows : [];
         localStorage.setItem(LS_CACHE, JSON.stringify(rows));
 
