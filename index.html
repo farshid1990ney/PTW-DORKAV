@@ -1664,7 +1664,7 @@
             const res = idx === 3 ? await tryLayer3(url, ping, 9000) : await tryLayer4(url, ping, 9000);
             if(res && (res.ok === true || res.version || res.message)){
               const ms = Date.now() - t0;
-              window.__srvIdem = !!res.build;
+              window.__srvIdem = !!res.build; window.__srvTxn = !!(res.caps && res.caps.indexOf && res.caps.indexOf('txnStatus') > -1);
               lockLayer(idx, ms);
               lastProbeAt = Date.now();
               return { ok:true, layer: idx, latency: ms, res: res };
@@ -1698,66 +1698,193 @@
 
     function sleepMs(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
 
-    // ترتیب تلاش‌ها: خواندن = یک لایه + یک لایه جایگزین | نوشتن = POST + (یک تلاش مجدد امن با همان txnId)
-    function buildAttempts(payload, write, heavy){
-      const att = [];
-      const sec = !!secondaryApiUrl();
-      if(write || heavy){
-        att.push(4);
-        // تلاش مجدد فقط وقتی امن است که سرور جدید (با جلوگیری از ثبت تکراری) نصب باشد
-        if(write && window.__srvIdem === true) att.push(4);
-        if(sec) att.push(5);
-      } else {
-        const pref = (lockedLayer === 3 || lockedLayer === 4) ? lockedLayer : 3;
-        att.push(pref);
-        att.push(pref === 3 ? 4 : 3);
-        if(sec) att.push(5);
+    /* ============================================================
+       v18 — گزارش شبکه + قطع‌کن مدار لایه‌ها + تطبیق وضعیت درخواست (txnStatus)
+       ============================================================ */
+    const LS_NETLOG = 'ptw_net_log_v1';
+    const ALLOW_L5_WRITES = (function(){ try { return localStorage.getItem('ptw_l5_writes') === '1'; } catch(e){ return false; } })();
+
+    function netLog(rec){
+      try {
+        const a = JSON.parse(localStorage.getItem(LS_NETLOG) || '[]');
+        rec.t = new Date().toISOString();
+        a.push(rec);
+        while(a.length > 60) a.shift();
+        localStorage.setItem(LS_NETLOG, JSON.stringify(a));
+      } catch(e){}
+    }
+    function getNetLog(){ try { return JSON.parse(localStorage.getItem(LS_NETLOG) || '[]'); } catch(e){ return []; } }
+    function errKind(e){
+      const m = String((e && e.message) || e || '');
+      if(/timeout/i.test(m)) return 'timeout';
+      if(/Failed to fetch|NetworkError|Load failed|AbortError|abort/i.test(m)) return 'network';
+      if(/status/i.test(m)) return 'http';
+      if(/json/i.test(m)) return 'badjson';
+      return m.slice(0, 40) || 'unknown';
+    }
+    function payloadSize(p){
+      let n = 600;
+      try {
+        if(p.photosBase64 && p.photosBase64.length){ p.photosBase64.forEach(function(x){ n += String(x || '').length; }); }
+        else if(p.photoBase64){ n += String(p.photoBase64).length; }
+      } catch(e){}
+      return n;
+    }
+
+    // قطع‌کن مدار: بعد از ۳ شکست پیاپی، لایه ۶۰ ثانیه کنار می‌رود (فقط در حافظه؛ ماندگار نیست)
+    const layerHealth = {};
+    function layerIsBad(idx){ const h = layerHealth[idx]; return !!(h && h.badUntil && h.badUntil > Date.now()); }
+    function layerFailed(idx){
+      const h = layerHealth[idx] || (layerHealth[idx] = { fails: 0, badUntil: 0 });
+      h.fails++;
+      if(h.fails >= 3){ h.badUntil = Date.now() + 60000; h.fails = 0; }
+    }
+    function layerOk(idx){ layerHealth[idx] = { fails: 0, badUntil: 0 }; }
+
+    async function attemptOnce(idx, payload, ms, kind){
+      const t = Date.now();
+      try {
+        const parsed = await sendOnLayer(idx, payload, ms);
+        layerOk(idx);
+        netLog({ a: payload.action, l: idx, ms: Date.now() - t, ok: true, k: kind, sv: parsed && parsed.serverMs, sz: payloadSize(payload) });
+        return parsed;
+      } catch(e){
+        layerFailed(idx);
+        netLog({ a: payload.action, l: idx, ms: Date.now() - t, ok: false, err: errKind(e), k: kind, sz: payloadSize(payload) });
+        throw e;
       }
+    }
+
+    // ترتیب لایه‌ها برای «خواندن»: لایه ترجیحی + جایگزین (لایه‌های خراب موقتاً رد می‌شوند) + سرور پشتیبان
+    function buildReadAttempts(){
+      const pref = (lockedLayer === 3 || lockedLayer === 4) ? lockedLayer : 3;
+      const alt = pref === 3 ? 4 : 3;
+      let att = [];
+      if(!layerIsBad(pref)) att.push(pref);
+      if(!layerIsBad(alt)) att.push(alt);
+      if(!att.length) att = [pref, alt];
+      if(secondaryApiUrl()) att.push(5);
       return att;
+    }
+
+    // پرسش وضعیت یک درخواست نوشتن (فقط با سرور v18): done | pending | unknown
+    async function fetchTxnStatus(txnId, code){
+      const url = primaryApiUrl();
+      return await tryLayer3(url, { action: 'txnstatus', txn: txnId, code: code || '', txnId: 'ST_' + Date.now() }, 9000);
+    }
+
+    function tagServer(parsed){
+      if(parsed && typeof parsed === 'object' && parsed.ok === false) parsed.fromServer = true;
+      return parsed;
+    }
+
+    /**
+     * ارسال «نوشتن»:
+     *  ۱) یک ارسال اصلی (POST)
+     *  ۲) اگر پاسخی نیامد: به‌جای ارسال کورکورانه، وضعیت همان txnId از سرور پرسیده می‌شود (done/pending/unknown)
+     *  ۳) فقط اگر سرور اصلاً چیزی ندارد، یک بار با همان txnId دوباره ارسال می‌شود (امن؛ سرور تکراری ثبت نمی‌کند)
+     */
+    async function sendWrite(payload, heavy){
+      let lastErr = null;
+      const canStatus = (window.__srvTxn === true);
+      const first = heavy ? 35000 : 20000;
+
+      try {
+        const parsed = await attemptOnce(4, payload, first, 'write');
+        if(parsed){
+          if(parsed.ok === false && parsed.retryable === true){ lastErr = new Error('server-busy'); }
+          else return { result: tagServer(parsed) };
+        }
+      } catch(e){ lastErr = e; }
+
+      if(canStatus){
+        const deadline = Date.now() + 18000;
+        let unknownCount = 0;
+        try { toast('⏳ سرور کند است؛ در حال بررسی وضعیت ثبت درخواست...'); } catch(e0){}
+        while(Date.now() < deadline){
+          await sleepMs(2500);
+          try {
+            const st = await fetchTxnStatus(payload.txnId, payload.code || payload.actorCode || '');
+            if(st && st.state === 'done' && st.result){
+              netLog({ a: payload.action, l: 3, ok: true, k: 'reconciled' });
+              return { result: Object.assign({}, st.result, { reconciled: true }) };
+            }
+            if(st && st.state === 'pending'){ unknownCount = 0; continue; }
+            if(st && st.state === 'unknown'){ unknownCount++; if(unknownCount >= 2) break; }
+          } catch(e){ lastErr = e; }
+        }
+        try {
+          payload._resend = true;
+          const parsed2 = await attemptOnce(4, payload, 15000, 'write-resend');
+          if(parsed2 && !(parsed2.ok === false && parsed2.retryable === true)) return { result: tagServer(parsed2) };
+        } catch(e){ lastErr = e; }
+      } else if(window.__srvIdem === true){
+        try {
+          payload._resend = true;
+          await sleepMs(600);
+          const parsed3 = await attemptOnce(4, payload, 20000, 'write-retry');
+          if(parsed3 && !(parsed3.ok === false && parsed3.retryable === true)) return { result: tagServer(parsed3) };
+        } catch(e){ lastErr = e; }
+      }
+
+      if(ALLOW_L5_WRITES && secondaryApiUrl()){
+        try {
+          payload._resend = true;
+          const parsed5 = await attemptOnce(5, payload, 20000, 'write-l5');
+          if(parsed5) return { result: tagServer(parsed5) };
+        } catch(e){ lastErr = e; }
+      }
+      return { err: lastErr };
     }
 
     async function callAPI(action, params = {}, timeoutMs) {
       const payload = Object.assign({ action: action }, params);
       if (!payload.txnId) {
-        payload.txnId = 'TXN_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+        payload.txnId = 'TXN_' + Date.now() + '_' + Math.floor(Math.random() * 1000000);
       }
       const write = isWriteAction(action);
       const heavy = isHeavyPayload(payload);
       const online = (typeof navigator === 'undefined') ? true : navigator.onLine;
 
       if(write && online === false){
+        if(payload._fromQueue) return { ok:false, transient:true, error:'اینترنت دستگاه قطع است.' };
         enqueueOfflineAction(payload);
         updateActiveLayerUI(6, 0);
-        return { ok:false, offlineQueued:true, error:'اینترنت گوشی قطع است. عملیات در صف آفلاین شما ذخیره شد.' };
+        return { ok:false, offlineQueued:true, transient:true, error:'اینترنت گوشی قطع است. عملیات در صف آفلاین شما ذخیره شد.' };
       }
 
       const t0 = Date.now();
-      // بودجه‌ی زمانی واقعی (سرور Apps Script گاهی ۳ تا ۸ ثانیه برای شروع سرد نیاز دارد)
-      const budget = Math.max(timeoutMs || 0, heavy ? 40000 : (write ? 30000 : 22000));
-      const attempts = buildAttempts(payload, write, heavy);
-      let lastErr = null;
+
+      if(write){
+        const w = await sendWrite(payload, heavy);
+        if(w.result){
+          lockLayer(4, Date.now() - t0);
+          return w.result;
+        }
+        if(!payload._fromQueue){
+          enqueueOfflineAction(payload);
+          updateActiveLayerUI(6, 0);
+          return { ok: false, offlineQueued: true, transient: true, error: 'ارتباط با سرور برقرار نشد؛ در صف آفلاین ذخیره شد و خودکار ارسال می‌شود (تکراری ثبت نمی‌شود).' };
+        }
+        return { ok: false, transient: true, error: online ? 'ارتباط با سرور برقرار نشد.' : 'اینترنت دستگاه قطع است.' };
+      }
+
+      // ---- خواندن ----
+      const budget = Math.max(timeoutMs || 0, heavy ? 40000 : 22000);
+      const attempts = heavy ? [4].concat(secondaryApiUrl() ? [5] : []) : buildReadAttempts();
       for(let i = 0; i < attempts.length; i++){
         const left = budget - (Date.now() - t0);
         if(left < 2500) break;
         const isLast = (i === attempts.length - 1);
         const slice = isLast ? left : Math.max(4000, Math.floor(left * 0.6));
-        if(i > 0) await sleepMs(600);
+        if(i > 0) await sleepMs(400);
         try {
-          const parsed = await sendOnLayer(attempts[i], payload, slice);
+          const parsed = await attemptOnce(attempts[i], payload, slice, 'read');
           if(parsed){
             lockLayer(attempts[i], Date.now() - t0);
-            return parsed;
+            return tagServer(parsed);
           }
-        } catch(e){
-          lastErr = e;
-        }
-      }
-
-      if (write && !payload._fromQueue) {
-        enqueueOfflineAction(payload);
-        updateActiveLayerUI(6, 0);
-        const reason = online ? 'ارتباط با سرور برقرار نشد؛ در صف آفلاین شما ذخیره شد (در صورت ثبت‌شدن قبلی، تکراری ثبت نمی‌شود).' : 'اینترنت گوشی قطع است.';
-        return { ok: false, offlineQueued: true, error: reason };
+        } catch(e){}
       }
 
       if (action === 'permits') {
@@ -1775,6 +1902,7 @@
 
       return {
         ok: false,
+        transient: true,
         error: online ? 'خطا در ارتباط با سرور (پاسخی دریافت نشد).' : 'اینترنت دستگاه قطع است.'
       };
     }
@@ -1834,7 +1962,7 @@
     function queueItemLabel(item){
       const a = String(item.action||'').toLowerCase();
       const no = item.permitNo || '';
-      if(a.indexOf('patrol')!==-1) return 'گشت HSE' + (no?(' — پرمیت '+no):'') + (item._photosDropped?' (عکس‌ها ذخیره نشد؛ دوباره فقط وقتی آنلاین شدید بفرستید)':'');
+      if(a.indexOf('patrol')!==-1) return 'گشت HSE' + (no?(' — پرمیت '+no):'') + ((item._photosDropped||item._photosLost)?' (عکس‌ها ذخیره نشد)':'');
       if(a.indexOf('create')!==-1) return 'ثبت پرمیت' + (no?(' '+no):'');
       if(a.indexOf('approve')!==-1) return 'تأیید پرمیت ' + no;
       if(a.indexOf('reject')!==-1) return 'رد پرمیت ' + no;
@@ -1842,111 +1970,276 @@
       if(a.indexOf('reactivate')!==-1) return 'تمدید پرمیت ' + no;
       return (item.action||'عملیات') + (no?(' '+no):'');
     }
-    function isSameQueueItem(a,b){
-      return isMyQueueItem(a) && String(a.action||'')===String(b.action||'') && String(a.permitNo||'')===String(b.permitNo||'') && itemOwnerCode(a)===itemOwnerCode(b);
+    /* ============================================================
+       v18 — صف آفلاین (Outbox)
+       - عکس‌ها در IndexedDB (بدون حذف و بدون سقف ۱.۵MB)
+       - تشخیص تکراری بر اساس txnId (و اثرانگشت محتوا فقط در ۱۰ دقیقه)
+       - خطای دائمی سرور از صف خارج و در «فهرست ردشده‌ها» نمایش داده می‌شود
+       - ارسال خودکار (آنلاین‌شدن / بازگشت به برنامه / هر ۴۵ ثانیه) و توقف در اولین خطای شبکه
+       ============================================================ */
+    const LS_OFFLINE_FAILED = 'ptw_offline_failed_v1';
+    const IDB_NAME = 'ptw_outbox_v1';
+    const IDB_STORE = 'photos';
+    const __photoWrites = {};
+    let __idbP = null;
+    let __queueBusy = false;
+
+    function idbOpen(){
+      if(__idbP) return __idbP;
+      __idbP = new Promise(function(resolve, reject){
+        try {
+          if(typeof indexedDB === 'undefined'){ reject(new Error('no idb')); return; }
+          const rq = indexedDB.open(IDB_NAME, 1);
+          rq.onupgradeneeded = function(){ try { rq.result.createObjectStore(IDB_STORE); } catch(e){} };
+          rq.onsuccess = function(){ resolve(rq.result); };
+          rq.onerror = function(){ reject(rq.error || new Error('idb open')); };
+        } catch(e){ reject(e); }
+      });
+      __idbP.catch(function(){ __idbP = null; });
+      return __idbP;
     }
+    function idbPut(key, val){
+      return idbOpen().then(function(db){
+        return new Promise(function(res, rej){
+          const tx = db.transaction(IDB_STORE, 'readwrite');
+          tx.objectStore(IDB_STORE).put(val, key);
+          tx.oncomplete = function(){ res(true); };
+          tx.onerror = function(){ rej(tx.error || new Error('idb put')); };
+          tx.onabort = function(){ rej(tx.error || new Error('idb abort')); };
+        });
+      });
+    }
+    function idbGet(key){
+      return idbOpen().then(function(db){
+        return new Promise(function(res, rej){
+          const rq = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).get(key);
+          rq.onsuccess = function(){ res(rq.result); };
+          rq.onerror = function(){ rej(rq.error || new Error('idb get')); };
+        });
+      });
+    }
+    function idbDel(key){
+      if(!key) return Promise.resolve();
+      return idbOpen().then(function(db){
+        return new Promise(function(res){
+          const tx = db.transaction(IDB_STORE, 'readwrite');
+          tx.objectStore(IDB_STORE).delete(key);
+          tx.oncomplete = function(){ res(true); };
+          tx.onerror = tx.onabort = function(){ res(false); };
+        });
+      }).catch(function(){ return false; });
+    }
+
+    function qKey(item){ return String((item && item.txnId) || ((item && item.action) + '|' + (item && item._enqueuedAt))); }
+    function saveOfflineQueue(list){ localStorage.setItem(LS_OFFLINE_QUEUE, JSON.stringify(list)); }
+    function removeFromQueue(item){
+      const k = qKey(item);
+      try { saveOfflineQueue(getOfflineQueue().filter(function(x){ return qKey(x) !== k; })); } catch(e){}
+    }
+    function markPhotosLost(photoKey){
+      try {
+        const q = getOfflineQueue();
+        q.forEach(function(x){ if(x._photoKey === photoKey){ x._photosLost = true; delete x._photoKey; } });
+        saveOfflineQueue(q);
+      } catch(e){}
+    }
+
+    function getFailedQueue(){ try { return JSON.parse(localStorage.getItem(LS_OFFLINE_FAILED) || '[]'); } catch(e){ return []; } }
+    function getMyFailedQueue(){ return getFailedQueue().filter(isMyQueueItem); }
+    function pushFailed(item, reason){
+      try {
+        const f = getFailedQueue();
+        const c = Object.assign({}, item);
+        delete c.photosBase64; delete c.photoBase64;
+        c._failReason = String(reason || 'رد شد');
+        c._failedAt = new Date().toISOString();
+        f.push(c);
+        while(f.length > 50) f.shift();
+        localStorage.setItem(LS_OFFLINE_FAILED, JSON.stringify(f));
+      } catch(e){}
+    }
+    function clearFailedQueue(){
+      const others = getFailedQueue().filter(function(x){ return !isMyQueueItem(x); });
+      try { localStorage.setItem(LS_OFFLINE_FAILED, JSON.stringify(others)); } catch(e){}
+      renderOfflineQueueList();
+      toast('فهرست ردشده‌ها پاک شد');
+    }
+
+    // اثرانگشت محتوا (برای تشخیص دوبار-زدن؛ txnId هر ارسال متفاوت است)
+    function queueFingerprint(item){
+      const skip = { txnId:1, _fromQueue:1, _resend:1, _ownerCode:1, _ownerName:1, _enqueuedAt:1, _photoKey:1, _photosLost:1, _photosDropped:1, photosBase64:1, photoBase64:1, _failReason:1, _failedAt:1 };
+      return Object.keys(item).filter(function(k){ return !skip[k]; }).sort().map(function(k){ return k + '=' + JSON.stringify(item[k]); }).join('|');
+    }
+    function isSameQueueItem(a, b){
+      if(!isMyQueueItem(a)) return false;
+      if(a.txnId && b.txnId && String(a.txnId) === String(b.txnId)) return true;
+      const ta = Date.parse(a._enqueuedAt || '') || 0;
+      const tb = Date.parse(b._enqueuedAt || '') || Date.now();
+      if(Math.abs(tb - ta) > 10 * 60 * 1000) return false;
+      return String(a.action || '') === String(b.action || '') && queueFingerprint(a) === queueFingerprint(b);
+    }
+    function collectPhotos(p){
+      const list = (p.photosBase64 && p.photosBase64.length) ? p.photosBase64 : (p.photoBase64 ? [p.photoBase64] : []);
+      return list.filter(function(x){ return !!x; });
+    }
+
     function enqueueOfflineAction(payload) {
       const queue = getOfflineQueue();
       const copy = Object.assign({}, payload);
       copy._enqueuedAt = new Date().toISOString();
       copy._ownerCode = myOwnerCode() || itemOwnerCode(copy);
       copy._ownerName = me ? ((me.firstName||'') + ' ' + (me.lastName||'')).trim() : '';
-      if (copy.photoBase64 || (copy.photosBase64 && copy.photosBase64.length)) {
-        const plist = (copy.photosBase64 && copy.photosBase64.length) ? copy.photosBase64 : [copy.photoBase64];
-        let totalLen = 0;
-        plist.forEach(function(x){ totalLen += String(x || '').length; });
+      const plist = collectPhotos(copy);
+      delete copy.photoBase64;
+      delete copy.photosBase64;
+      if(plist.length){
         copy._photoCount = plist.length;
-        delete copy.photoBase64;
-        if (totalLen <= 1500000) {
-          copy.photosBase64 = plist;      // عکس‌ها در صف نگه داشته می‌شوند
-        } else {
-          copy._photosDropped = true;     // خیلی حجیم؛ مثل قبل حذف می‌شود
-          delete copy.photosBase64;
-        }
+        copy._phSig = plist.map(function(x){ return String(x).length + ':' + String(x).slice(-24); }).join(',');
       }
       if (queue.some(function(x){ return isSameQueueItem(x, copy); })) {
         updateDrawerUI();
         renderOfflineQueueList();
-        toast('⚠️ همین مورد از قبل در صف آفلاین است. دوباره نفرستید.');
+        toast('⚠️ همین مورد از قبل در صف است. دوباره نفرستید.');
         return;
+      }
+      let useIdb = false;
+      if(plist.length){
+        if(typeof indexedDB !== 'undefined'){ copy._photoKey = String(copy.txnId || ('P' + Date.now())); useIdb = true; }
+        else { copy.photosBase64 = plist; }
       }
       queue.push(copy);
       try {
-        localStorage.setItem(LS_OFFLINE_QUEUE, JSON.stringify(queue));
+        saveOfflineQueue(queue);
       } catch(eQ){
-        // حافظه پر است: یک‌بار بدون عکس تلاش می‌کنیم
         if (copy.photosBase64) {
           delete copy.photosBase64;
-          copy._photosDropped = true;
-          try { localStorage.setItem(LS_OFFLINE_QUEUE, JSON.stringify(queue)); }
-          catch(eQ2){
-            toast('❌ حافظه گوشی پر است؛ صف ذخیره نشد. اینترنت را وصل کنید و فقط یک‌بار بفرستید.');
-            return;
-          }
+          copy._photosLost = true;
+          try { saveOfflineQueue(queue); toast('⚠️ حافظه پر است؛ عکس‌های این مورد ذخیره نشد (خود گزارش ذخیره شد).'); }
+          catch(eQ2){ queue.pop(); toast('❌ حافظه گوشی پر است؛ صف ذخیره نشد. اینترنت را وصل کنید و فقط یک‌بار بفرستید.'); return; }
         } else {
+          queue.pop();
           toast('❌ حافظه گوشی پر است؛ صف ذخیره نشد. اینترنت را وصل کنید و فقط یک‌بار بفرستید.');
           return;
         }
       }
+      if(useIdb){
+        const pk = copy._photoKey;
+        const pw = idbPut(pk, plist).then(function(){ return true; }, function(){ return false; });
+        __photoWrites[pk] = pw;
+        pw.then(function(ok){
+          if(!ok){
+            markPhotosLost(pk);
+            toast('⚠️ ذخیره‌ی عکس‌ها در حافظه‌ی گوشی ممکن نشد؛ گزارش بدون عکس ارسال می‌شود.');
+            renderOfflineQueueList();
+          }
+        });
+      }
       updateDrawerUI();
       renderOfflineQueueList();
-      toast('📦 در صف آفلاین ذخیره شد: ' + queueItemLabel(copy) + ' — دوباره ارسال نکنید.');
+      toast('📦 در صف ذخیره شد: ' + queueItemLabel(copy) + ' — خودکار ارسال می‌شود؛ دوباره نفرستید.');
     }
+
     function renderOfflineQueueList(){
       const box = document.getElementById('offlineQueueList');
       const q = getMyOfflineQueue();
+      const f = getMyFailedQueue();
       const ban = document.getElementById('offlineBanner');
       const banT = document.getElementById('offlineBannerText');
       if (ban) {
-        if (me && q.length){ ban.classList.add('show'); if(banT) banT.textContent = q.length + ' مورد صف آفلاین شماست. دوباره همان گشت/عکس را نفرستید.'; }
-        else ban.classList.remove('show');
+        if (me && (q.length || f.length)){
+          ban.classList.add('show');
+          if(banT) banT.textContent = (q.length ? (q.length + ' مورد در صف ارسال است (دوباره نفرستید). ') : '') + (f.length ? (f.length + ' مورد توسط سرور رد شد.') : '');
+        } else ban.classList.remove('show');
       }
       if(!box) return;
-      if(!q.length){ box.innerHTML = '<div class="hint">صف خالی است.</div>'; return; }
-      box.innerHTML = q.map(function(item, i){
+      let html = '';
+      if(!q.length && !f.length) html = '<div class="hint">صف خالی است.</div>';
+      html += q.map(function(item){
         const when = item._enqueuedAt ? String(item._enqueuedAt).replace('T',' ').slice(0,19) : '';
-        return '<div class="q-item"><div style="font-weight:900">'+esc(queueItemLabel(item))+'</div><div class="hint">'+esc(when)+'</div></div>';
+        const note = item._photosLost ? ' <span style="color:#b91c1c">(عکس‌ها ذخیره نشد)</span>' : (item._photoCount ? (' 📷' + item._photoCount) : '');
+        return '<div class="q-item"><div style="font-weight:900">'+esc(queueItemLabel(item))+note+'</div><div class="hint">'+esc(when)+'</div></div>';
       }).join('');
+      if(f.length){
+        html += '<div style="font-weight:900;margin:10px 0 4px;color:#b91c1c">❌ رد‌شده توسط سرور (دیگر ارسال نمی‌شود)</div>';
+        html += f.map(function(item){
+          return '<div class="q-item" style="border-color:#fca5a5"><div style="font-weight:900">'+esc(queueItemLabel(item))+'</div><div class="hint">'+esc(item._failReason || '')+'</div><div class="hint">اگر قبلاً ثبت شده، اقدام لازم نیست؛ در غیر این‌صورت دوباره از خود برنامه ثبت کنید.</div></div>';
+        }).join('');
+        html += '<button class="btn btn-x btn-sm" style="margin-top:6px" onclick="clearFailedQueue()">🧹 پاک کردن فهرست ردشده‌ها</button>';
+      }
+      box.innerHTML = html;
     }
+
     function clearOfflineQueueConfirm(){
       if(!getMyOfflineQueue().length){ toast('صف شما خالی است'); return; }
       if(!confirm('فقط صف آفلاین خودتان پاک شود؟ موارد دیگران روی این گوشی می‌ماند.')) return;
-      const others = getOfflineQueue().filter(function(x){ return !isMyQueueItem(x); });
-      localStorage.setItem(LS_OFFLINE_QUEUE, JSON.stringify(others));
+      const all = getOfflineQueue();
+      all.filter(isMyQueueItem).forEach(function(x){ idbDel(x._photoKey); });
+      saveOfflineQueue(all.filter(function(x){ return !isMyQueueItem(x); }));
       updateDrawerUI();
       renderOfflineQueueList();
       toast('صف آفلاین شما خالی شد');
     }
 
     async function processOfflineQueue() {
-      const all = getOfflineQueue();
-      const mine = all.filter(isMyQueueItem);
-      const others = all.filter(function(x){ return !isMyQueueItem(x); });
-      if (!mine.length) { renderOfflineQueueList(); return; }
-
-      toast('🔄 در حال ارسال ' + mine.length + ' مورد صف شما...');
-      const remainingMine = [];
-
-      for (let i = 0; i < mine.length; i++) {
-        const item = Object.assign({}, mine[i], { _fromQueue: true });
-        try {
-          const res = await postAction8Layers(item);
-          if (!res || !res.ok) remainingMine.push(item);
-        } catch(e) {
-          remainingMine.push(item);
+      if (__queueBusy) return;
+      __queueBusy = true;
+      try {
+        const snapshot = getMyOfflineQueue();
+        if (!snapshot.length) { renderOfflineQueueList(); return; }
+        toast('🔄 در حال ارسال ' + snapshot.length + ' مورد صف شما...');
+        let sent = 0, rejected = 0, stopped = false;
+        for (let i = 0; i < snapshot.length; i++) {
+          const snap = snapshot[i];
+          const item = Object.assign({}, snap, { _fromQueue: true });
+          if (item._photoKey) {
+            try {
+              if (__photoWrites[item._photoKey]) await __photoWrites[item._photoKey];
+              const ph = await idbGet(item._photoKey);
+              if (ph && ph.length) { item.photosBase64 = ph; item.photoBase64 = ph[0]; }
+              else { item._photosLost = true; }
+            } catch(eP) { item._photosLost = true; }
+          }
+          let res = null;
+          try { res = await postAction8Layers(item); } catch(e) { res = { ok: false, transient: true }; }
+          if (res && res.ok) {
+            removeFromQueue(snap);
+            idbDel(snap._photoKey);
+            sent++;
+            continue;
+          }
+          if (res && res.fromServer && !res.retryable) {
+            // رد قطعی سرور (مثلاً «قبلاً بسته شده»): برای همیشه در صف نماند
+            removeFromQueue(snap);
+            idbDel(snap._photoKey);
+            pushFailed(snap, res.error || 'رد شد');
+            rejected++;
+            continue;
+          }
+          stopped = true; // شبکه/سرور مشکل دارد؛ بقیه را الان امتحان نکن
+          break;
         }
+        updateDrawerUI();
+        renderOfflineQueueList();
+        if (sent) { toast('✅ ' + sent + ' مورد از صف شما ارسال شد.'); refreshQuiet(); }
+        if (rejected) { toast('⚠️ ' + rejected + ' مورد توسط سرور رد شد (جزئیات: منوی صف آفلاین).'); }
+        if (stopped && !sent) { toast('⚠️ ارسال صف انجام نشد؛ بعداً خودکار دوباره تلاش می‌شود.'); }
+      } finally {
+        __queueBusy = false;
       }
+    }
 
-      localStorage.setItem(LS_OFFLINE_QUEUE, JSON.stringify(others.concat(remainingMine)));
-      updateDrawerUI();
-      renderOfflineQueueList();
-
-      if (remainingMine.length < mine.length) {
-        toast('✅ ' + (mine.length - remainingMine.length) + ' مورد از صف شما ارسال شد.');
-        refreshQuiet();
-      } else {
-        toast('⚠️ ارسال صف شما انجام نشد. اینترنت را بررسی کنید.');
-      }
+    function startQueueAutoSync(){
+      if (window.__qAutoSync) return;
+      window.__qAutoSync = true;
+      const kick = function(){
+        try {
+          if (__queueBusy) return;
+          if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+          if (getMyOfflineQueue().length > 0) processOfflineQueue();
+        } catch(e){}
+      };
+      setInterval(function(){ if (!document.hidden) kick(); }, 45000);
+      document.addEventListener('visibilitychange', function(){ if (!document.hidden) setTimeout(kick, 800); });
     }
 
     function updateDrawerUI() {
@@ -2312,10 +2605,6 @@
           fullName: me.firstName + ' ' + me.lastName
         });
         if(res && res.ok){
-          if(res.offlineQueued){
-            toast('⚠️ قطعی شبکه: تمدید در صف آفلاین ذخیره شد.');
-            return;
-          }
           const lp = rows.find(x => String(x.permitNo).trim() === String(res.permitNo || currentReactivatePermit.permitNo).trim());
           if(lp){
             lp.permitStatus = 'فعال';
@@ -2329,6 +2618,8 @@
           switchTabQuick('active');
           paint();
           refreshQuiet();
+        } else if(res && res.offlineQueued){
+          closeReactivateModal();
         } else {
           toast('خطا: ' + ((res && res.error) || 'ناشناخته'));
         }
@@ -2423,8 +2714,10 @@
       if (res && res.ok) {
         toast('✅ ' + (res.message || 'تنظیمات واحدها با موفقیت ذخیره شد.'));
         closeUnitsManagerModal();
+      } else if (res && res.offlineQueued) {
+        closeUnitsManagerModal();
       } else {
-        toast('❌ خطا در ذخیره تنظیمات');
+        toast('❌ خطا در ذخیره تنظیمات' + ((res && res.error) ? (': ' + res.error) : ''));
       }
     }
 
@@ -2888,7 +3181,6 @@
           switchTabQuick('pending');
           refreshQuiet();
         } else if(res && res.offlineQueued){
-          toast('⚠️ قطعی شبکه: پرمیت در صف آفلاین ذخیره شد.');
           closeCreatePermitModal();
         } else {
           toast('خطا در ثبت پرمیت: ' + ((res && res.error) || 'ناشناخته'));
@@ -3062,6 +3354,8 @@
             me[def.can] = !!grant;
             setSession(me);
           }
+        } else if(res && res.offlineQueued){
+          /* در صف ذخیره شد؛ پیام را خود صف نشان داده است */
         } else {
           toast('خطا: ' + ((res && res.error) || 'ناشناخته'));
         }
@@ -3400,6 +3694,7 @@
           processOfflineQueue();
         }
       });
+      startQueueAutoSync();
 
       try {
         const c = JSON.parse(localStorage.getItem(LS_CACHE) || '[]');
@@ -3493,7 +3788,7 @@
         }
 
         if(!data || !data.ok) throw new Error();
-        window.__srvIdem = !!data.build;
+        window.__srvIdem = !!data.build; window.__srvTxn = !!(data.caps && data.caps.indexOf && data.caps.indexOf('txnStatus') > -1);
         rows = Array.isArray(data.rows) ? data.rows : [];
         localStorage.setItem(LS_CACHE, JSON.stringify(rows));
 
@@ -3585,6 +3880,8 @@
         if(res && res.ok){
           toast('✅ پرمیت شماره ' + permitNo + ' با موفقیت در گوگل‌شیت فعال شد.');
           refreshQuiet();
+        } else if(res && res.offlineQueued){
+          /* در صف ذخیره شد */
         } else {
           toast('خطا در ثبت شیت: ' + (res.error || 'ناشناخته'));
         }
@@ -3646,6 +3943,8 @@
           toast('❌ پرمیت شماره ' + currentRejectPermit.permitNo + ' رد شد و در گوگل‌شیت ثبت گردید.');
           closeRejectPermitModal();
           refreshQuiet();
+        } else if(res && res.offlineQueued){
+          closeRejectPermitModal();
         } else {
           toast('خطا: ' + (res.error || 'ناشناخته'));
         }
@@ -3765,6 +4064,8 @@
           toast('✅ بازرسی مجدد انجام شد و وضعیت پرمیت به ' + targetStatus + ' تغییر یافت.');
           closeReinspectModal();
           refreshQuiet();
+        } else if(res && res.offlineQueued){
+          closeReinspectModal();
         } else {
           toast('خطا: ' + (res.error || 'ناشناخته'));
         }
@@ -3825,6 +4126,8 @@
           toast('✓ پرمیت شماره ' + currentClosePermit.permitNo + ' در گوگل‌شیت بسته شد.');
           closeClosePermitModal();
           refreshQuiet();
+        } else if(res && res.offlineQueued){
+          closeClosePermitModal();
         } else {
           toast('خطا: ' + (res.error || 'ناشناخته'));
         }
@@ -4043,6 +4346,8 @@
           toast('✓ بازدید گشت ثبت شد' + (closePermitAlso ? ' و پرمیت بسته شد.' : ' و عکس به Google Drive منتقل گردید.'));
           closePatrolModal();
           refreshQuiet();
+        } else if(res && res.offlineQueued){
+          closePatrolModal();
         } else {
           toast('خطا در ثبت: ' + (res.error || 'ناشناخته'));
         }
@@ -4206,7 +4511,7 @@
     function closeOfflineSyncModal(){ document.getElementById('offlineSyncModal').classList.remove('show'); }
 
     function exportOfflineData(){
-      const dataToExport = { cachedRows: rows, offlineQueue: getOfflineQueue(), exportedAt: new Date().toISOString() };
+      const dataToExport = { cachedRows: rows, offlineQueue: getOfflineQueue(), failedQueue: getFailedQueue(), netLog: getNetLog(), exportedAt: new Date().toISOString() };
       const blob = new Blob([JSON.stringify(dataToExport, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
